@@ -1,6 +1,7 @@
 name: xue_hua_navite_cache_manager_example
 description: "Comprehensive example application demonstrating the xue_hua_navite_cache_manager plugin."
 publish_to: 'none'
+version: 1.0.0+1
 
 environment:
   sdk: ^3.13.0

@@ -2,8 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:xue_hua_navite_cache_manager/xue_hua_navite_cache_manager.dart';
+import 'package:xue_hua_navite_cache_manager_example/app_theme.dart';
 
 void main() {
   runApp(const CacheManagerDemoApp());
@@ -18,10 +19,9 @@ class CacheManagerDemoApp extends StatelessWidget {
     return MaterialApp(
       title: 'XueHua Native Cache Manager',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF0066CC),
-        useMaterial3: true,
-      ),
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.system,
       home: const CacheWorkbenchPage(),
     );
   }
@@ -38,7 +38,8 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   final XueHuaNaviteCacheManager _cache = XueHuaNaviteCacheManager.instance;
 
   final TextEditingController _urlController = TextEditingController(
-    text: 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+    text:
+        'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
   );
   final TextEditingController _customKeyController = TextEditingController();
   final TextEditingController _tagController = TextEditingController(
@@ -80,26 +81,22 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   static const List<Map<String, String>> _sampleUrls = <Map<String, String>>[
     <String, String>{
       'label': 'Owl Image (JPG)',
-      'url':
-          'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
       'tag': 'images',
     },
     <String, String>{
       'label': 'Falcon Image (JPG)',
-      'url':
-          'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
+      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
       'tag': 'images',
     },
     <String, String>{
       'label': 'Puffin Image (JPG)',
-      'url':
-          'https://flutter.github.io/assets-for-api-docs/assets/widgets/puffin.jpg',
+      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/puffin.jpg',
       'tag': 'images',
     },
     <String, String>{
       'label': 'Butterfly Video (MP4)',
-      'url':
-          'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
+      'url': 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
       'tag': 'videos',
     },
   ];
@@ -110,23 +107,19 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
       <Map<String, String>>[
         <String, String>{
           'title': '#1 Owl (Flutter Official Asset)',
-          'url':
-              'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+          'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
         },
         <String, String>{
           'title': '#2 Falcon (Pinned Asset)',
-          'url':
-              'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
+          'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
         },
         <String, String>{
           'title': '#3 Puffin (Circle Avatar Builder)',
-          'url':
-              'https://flutter.github.io/assets-for-api-docs/assets/widgets/puffin.jpg',
+          'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/puffin.jpg',
         },
         <String, String>{
           'title': '#4 Owl-2 (Flutter Official Asset)',
-          'url':
-              'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl-2.jpg',
+          'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl-2.jpg',
         },
         for (int i = 1; i <= 100; i++)
           <String, String>{
@@ -309,12 +302,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
     try {
       final subset = _publicGalleryImages.take(count).toList();
       final requests = subset
-          .map(
-            (item) => CacheRequest(
-              url: item['url']!,
-              tag: 'gallery',
-            ),
-          )
+          .map((item) => CacheRequest(url: item['url']!, tag: 'gallery'))
           .toList();
       final prefetched = await _cache.prefetchAll(requests);
       _setLog(
@@ -530,9 +518,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                   ),
                 ),
                 Expanded(
-                  child: LinearProgressIndicator(
-                    value: progress.progress,
-                  ),
+                  child: LinearProgressIndicator(value: progress.progress),
                 ),
                 const SizedBox(width: 8),
                 Text(
@@ -626,7 +612,9 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                           .map(
                             (alg) => DropdownMenuItem<CacheChecksumAlgorithm>(
                               value: alg,
-                              child: Text('Hash: ${alg.wireValue.toUpperCase()}'),
+                              child: Text(
+                                'Hash: ${alg.wireValue.toUpperCase()}',
+                              ),
                             ),
                           )
                           .toList(),
@@ -721,7 +709,8 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                       'Checksum (${res.entry.checksumAlgorithm.wireValue}): ${res.entry.checksum}',
                     ),
                   if (_previewBytes != null &&
-                      (res.entry.mimeType?.startsWith('image/') ?? false)) ...<Widget>[
+                      (res.entry.mimeType?.startsWith('image/') ??
+                          false)) ...<Widget>[
                     const SizedBox(height: 12),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
@@ -980,7 +969,9 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
               FilledButton.tonalIcon(
                 onPressed: () async {
                   final count = await _cache.clearAll(includePinned: false);
-                  _setLog('Cleared $count unpinned entries (pinned preserved).');
+                  _setLog(
+                    'Cleared $count unpinned entries (pinned preserved).',
+                  );
                   await _refreshDashboard();
                 },
                 icon: const Icon(Icons.cleaning_services_outlined, size: 18),
@@ -1014,7 +1005,9 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                       ),
                       child: ListTile(
                         leading: Icon(
-                          entry.pinned ? Icons.push_pin : Icons.insert_drive_file,
+                          entry.pinned
+                              ? Icons.push_pin
+                              : Icons.insert_drive_file,
                           color: entry.pinned
                               ? Theme.of(context).colorScheme.primary
                               : null,
@@ -1122,7 +1115,9 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                         );
                       },
                       icon: const Icon(Icons.search),
-                      label: const Text('Check Offline Cache (getFileFromCache)'),
+                      label: const Text(
+                        'Check Offline Cache (getFileFromCache)',
+                      ),
                     ),
                     OutlinedButton.icon(
                       onPressed: () async {
@@ -1166,9 +1161,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                           ? null
                           : () => _runBulkBenchmark(10000),
                       icon: const Icon(Icons.bolt),
-                      label: const Text(
-                        'Run 10,000+ Entries Stress Benchmark',
-                      ),
+                      label: const Text('Run 10,000+ Entries Stress Benchmark'),
                     ),
                   ],
                 ),

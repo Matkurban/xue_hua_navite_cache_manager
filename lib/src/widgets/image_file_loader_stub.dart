@@ -1,10 +1,12 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/painting.dart';
+
 /// Platform-incompatible stub for loading image bytes from a local filesystem path.
 Future<ui.Codec> loadFileImageCodec(
   String filePath,
-  ui.ImageDecoderCallback decode, {
+  ImageDecoderCallback decode, {
   int? maxWidth,
   int? maxHeight,
 }) {
@@ -16,7 +18,7 @@ Future<ui.Codec> loadFileImageCodec(
 /// Decodes raw [bytes] into a [ui.Codec] with optional target dimensions.
 Future<ui.Codec> decodeImageBytes(
   Uint8List bytes,
-  ui.ImageDecoderCallback decode, {
+  ImageDecoderCallback decode, {
   int? maxWidth,
   int? maxHeight,
 }) async {

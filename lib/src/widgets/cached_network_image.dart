@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../xue_hua_navite_cache_manager.dart';
-import 'cached_network_image_provider.dart';
 
 /// Signature for building a custom widget once the [ImageProvider] has resolved.
 typedef CachedImageWidgetBuilder =

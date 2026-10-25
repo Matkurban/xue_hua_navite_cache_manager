@@ -1,5 +1,11 @@
 ## 1.1.0
 
+* Added a bounded native download concurrency pool controlled by `maxConcurrentDownloads` across Android, iOS, macOS, Windows, Linux, and Web, so large batches (e.g. 100+ images) stay controlled instead of flooding the network stack.
+* Reworked iOS/macOS downloads to pure async `URLSession` completion callbacks with a download permit queue (removed blocking `semaphore.wait()` on GCD workers).
+* Made `prefetchAll` run through the same bounded concurrent pool on every platform instead of serial one-by-one downloads.
+* Added in-flight request deduplication by cache key on native platforms and in Dart `downloadFile`, so concurrent callers for the same URL/key share one network transfer and fan out one result.
+* Moved Windows WinHTTP and Linux curl downloads onto background worker threads so MethodChannel / UI threads are no longer blocked during transfers.
+* Fixed Windows `cancelDownload` so custom keys that are still only in the in-flight table (not yet indexed) can be canceled, matching Linux/Apple/Android behavior.
 * Added `CachedNetworkImage` widget and `CachedNetworkImageProvider` for high-performance, zero-jank 60/120 FPS network image rendering and caching across all 6 platforms.
 * Implemented zero-copy native file decoding (`ui.ImmutableBuffer.fromFilePath`) and C++ codec target-size downsampling (`memCacheWidth`, `memCacheHeight`, `maxWidth`, `maxHeight`) to prevent GPU/RAM spikes on high-resolution images.
 * Added synchronous `ImageCache` fast-path short-circuiting (`wasSynchronouslyLoaded`) to eliminate fade-in flicker during rapid list/grid scrolling.

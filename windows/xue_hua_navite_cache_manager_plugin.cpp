@@ -1104,15 +1104,30 @@ void XueHuaNaviteCacheManagerPlugin::HandleMethodCall(
       }
     }
   } else if (method == "cancelDownload") {
+    // Match Linux/Apple/Android: custom keys that are not yet in the index must
+    // still cancel by the raw keyOrUrl (ResolveKey alone would SHA-256 them).
     std::string key_or_url = GetStringArg(args, "keyOrUrl");
     std::string key = ResolveKey(key_or_url);
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = active_cancels_.find(key);
-    if (it != active_cancels_.end()) {
+    if (it == active_cancels_.end()) {
+      it = active_cancels_.find(key_or_url);
+    }
+    if (it == active_cancels_.end()) {
+      auto flight = in_flight_.find(key);
+      if (flight == in_flight_.end()) {
+        flight = in_flight_.find(key_or_url);
+      }
+      if (flight != in_flight_.end() && flight->second &&
+          flight->second->cancel_flag) {
+        flight->second->cancel_flag->store(true);
+        result->Success(flutter::EncodableValue(true));
+        return;
+      }
+      result->Success(flutter::EncodableValue(false));
+    } else {
       it->second->store(true);
       result->Success(flutter::EncodableValue(true));
-    } else {
-      result->Success(flutter::EncodableValue(false));
     }
   } else if (method == "getFileFromCache") {
     std::string key_or_url = GetStringArg(args, "keyOrUrl");

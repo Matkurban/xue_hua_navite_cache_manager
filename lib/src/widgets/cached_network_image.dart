@@ -3,29 +3,31 @@ import 'package:flutter/material.dart';
 import '../../xue_hua_navite_cache_manager.dart';
 
 /// Signature for building a custom widget once the [ImageProvider] has resolved.
-typedef CachedImageWidgetBuilder =
-    Widget Function(BuildContext context, ImageProvider imageProvider);
+typedef CachedImageWidgetBuilder = Widget Function(
+  BuildContext context,
+  ImageProvider imageProvider,
+);
 
 /// Signature for building a static placeholder widget while the image is loading.
-typedef CachedPlaceholderWidgetBuilder =
-    Widget Function(BuildContext context, String url);
+typedef CachedPlaceholderWidgetBuilder = Widget Function(
+  BuildContext context,
+  String url,
+);
 
 /// Signature for building a real-time download progress indicator widget.
-typedef CachedProgressIndicatorBuilder =
-    Widget Function(
-      BuildContext context,
-      String url,
-      ImageChunkEvent? progress,
-    );
+typedef CachedProgressIndicatorBuilder = Widget Function(
+  BuildContext context,
+  String url,
+  ImageChunkEvent? progress,
+);
 
 /// Signature for building a fallback widget when image loading or decoding fails.
-typedef CachedLoadingErrorWidgetBuilder =
-    Widget Function(
-      BuildContext context,
-      String url,
-      Object error,
-      StackTrace? stackTrace,
-    );
+typedef CachedLoadingErrorWidgetBuilder = Widget Function(
+  BuildContext context,
+  String url,
+  Object error,
+  StackTrace? stackTrace,
+);
 
 /// A high-performance widget that downloads, caches, and displays network images
 /// using [XueHuaNaviteCacheManager] and [CachedNetworkImageProvider].
@@ -215,53 +217,55 @@ class CachedNetworkImage extends StatelessWidget {
       semanticLabel: semanticLabel,
       excludeFromSemantics: excludeFromSemantics,
       gaplessPlayback: gaplessPlayback,
-      frameBuilder: (
-        BuildContext context,
-        Widget child,
-        int? frame,
-        bool wasSynchronouslyLoaded,
-      ) {
-        final Widget resolvedChild = imageBuilder != null
-            ? imageBuilder!(context, provider)
-            : child;
+      frameBuilder:
+          (
+            BuildContext context,
+            Widget child,
+            int? frame,
+            bool wasSynchronouslyLoaded,
+          ) {
+            final Widget resolvedChild = imageBuilder != null
+                ? imageBuilder!(context, provider)
+                : child;
 
-        // If loaded synchronously from Flutter's ImageCache, render immediately with zero animation overhead.
-        if (wasSynchronouslyLoaded) {
-          return resolvedChild;
-        }
+            // If loaded synchronously from Flutter's ImageCache, render immediately with zero animation overhead.
+            if (wasSynchronouslyLoaded) {
+              return resolvedChild;
+            }
 
-        if (frame == null) {
-          if (placeholder != null) {
-            return SizedBox(
-              width: width,
-              height: height,
-              child: placeholder!(context, imageUrl),
+            if (frame == null) {
+              if (placeholder != null) {
+                return SizedBox(
+                  width: width,
+                  height: height,
+                  child: placeholder!(context, imageUrl),
+                );
+              }
+              if (progressIndicatorBuilder != null) {
+                return SizedBox(
+                  width: width,
+                  height: height,
+                  child: progressIndicatorBuilder!(context, imageUrl, null),
+                );
+              }
+              return SizedBox(width: width, height: height);
+            }
+
+            if (fadeInDuration == Duration.zero) {
+              return resolvedChild;
+            }
+
+            return TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: 0.0, end: 1.0),
+              duration: fadeInDuration,
+              curve: fadeInCurve,
+              builder:
+                  (BuildContext context, double opacity, Widget? animChild) {
+                    return Opacity(opacity: opacity, child: animChild);
+                  },
+              child: resolvedChild,
             );
-          }
-          if (progressIndicatorBuilder != null) {
-            return SizedBox(
-              width: width,
-              height: height,
-              child: progressIndicatorBuilder!(context, imageUrl, null),
-            );
-          }
-          return SizedBox(width: width, height: height);
-        }
-
-        if (fadeInDuration == Duration.zero) {
-          return resolvedChild;
-        }
-
-        return TweenAnimationBuilder<double>(
-          tween: Tween<double>(begin: 0.0, end: 1.0),
-          duration: fadeInDuration,
-          curve: fadeInCurve,
-          builder: (BuildContext context, double opacity, Widget? animChild) {
-            return Opacity(opacity: opacity, child: animChild);
           },
-          child: resolvedChild,
-        );
-      },
       loadingBuilder: progressIndicatorBuilder != null
           ? (
               BuildContext context,
@@ -282,26 +286,23 @@ class CachedNetworkImage extends StatelessWidget {
               );
             }
           : null,
-      errorBuilder: (
-        BuildContext context,
-        Object error,
-        StackTrace? stackTrace,
-      ) {
-        if (errorWidget != null) {
-          return SizedBox(
-            width: width,
-            height: height,
-            child: errorWidget!(context, imageUrl, error, stackTrace),
-          );
-        }
-        return SizedBox(
-          width: width,
-          height: height,
-          child: const Center(
-            child: Icon(Icons.broken_image_outlined, color: Colors.grey),
-          ),
-        );
-      },
+      errorBuilder:
+          (BuildContext context, Object error, StackTrace? stackTrace) {
+            if (errorWidget != null) {
+              return SizedBox(
+                width: width,
+                height: height,
+                child: errorWidget!(context, imageUrl, error, stackTrace),
+              );
+            }
+            return SizedBox(
+              width: width,
+              height: height,
+              child: const Center(
+                child: Icon(Icons.broken_image_outlined, color: Colors.grey),
+              ),
+            );
+          },
     );
   }
 }

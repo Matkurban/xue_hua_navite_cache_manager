@@ -94,11 +94,10 @@ class CacheEntry {
       DateTime.fromMillisecondsSinceEpoch(createdAtMs, isUtc: true).toLocal();
 
   /// Last access timestamp as a [DateTime].
-  DateTime get lastAccessedAt =>
-      DateTime.fromMillisecondsSinceEpoch(
-        lastAccessedAtMs,
-        isUtc: true,
-      ).toLocal();
+  DateTime get lastAccessedAt => DateTime.fromMillisecondsSinceEpoch(
+    lastAccessedAtMs,
+    isUtc: true,
+  ).toLocal();
 
   /// Expiration timestamp as a [DateTime].
   DateTime get expiresAt =>

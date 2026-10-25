@@ -148,23 +148,23 @@ class CachedNetworkImageProvider
       }
 
       // Subscribe to throttled download progress events to drive ImageChunkEvent
-      progressSub = manager
-          .watchProgress(key.cacheKey ?? key.url)
-          .listen((event) {
-            if (!chunkEvents.isClosed &&
-                (event.state == CacheTransferState.inProgress ||
-                    event.state == CacheTransferState.completed) &&
-                event.bytesReceived >= 0) {
-              chunkEvents.add(
-                ImageChunkEvent(
-                  cumulativeBytesLoaded: event.bytesReceived,
-                  expectedTotalBytes: event.totalBytes > 0
-                      ? event.totalBytes
-                      : null,
-                ),
-              );
-            }
-          });
+      progressSub = manager.watchProgress(key.cacheKey ?? key.url).listen((
+        event,
+      ) {
+        if (!chunkEvents.isClosed &&
+            (event.state == CacheTransferState.inProgress ||
+                event.state == CacheTransferState.completed) &&
+            event.bytesReceived >= 0) {
+          chunkEvents.add(
+            ImageChunkEvent(
+              cumulativeBytesLoaded: event.bytesReceived,
+              expectedTotalBytes: event.totalBytes > 0
+                  ? event.totalBytes
+                  : null,
+            ),
+          );
+        }
+      });
 
       final result = await manager.downloadFile(
         CacheRequest(

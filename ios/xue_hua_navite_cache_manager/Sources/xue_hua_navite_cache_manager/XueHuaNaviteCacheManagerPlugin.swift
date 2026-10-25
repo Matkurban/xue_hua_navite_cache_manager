@@ -12,6 +12,8 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
   private var eventSink: FlutterEventSink?
   private let queue = DispatchQueue(label: "com.kurban.xue_hua_navite_cache_manager.queue", qos: .userInitiated, attributes: .concurrent)
   private let persistQueue = DispatchQueue(label: "com.kurban.xue_hua_navite_cache_manager.persist", qos: .utility)
+  /// Serial scheduler so download bookkeeping never blocks a GCD worker on the network.
+  private let downloadScheduleQueue = DispatchQueue(label: "com.kurban.xue_hua_navite_cache_manager.download", qos: .userInitiated)
   private let lock = NSLock()
   private var pendingPersistWorkItem: DispatchWorkItem?
 
@@ -83,7 +85,18 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
   private var missCount: Int64 = 0
   private var evictionCount: Int64 = 0
   private var indexLoaded: Bool = false
-  private var activeTasks: [String: URLSessionDataTask] = [:]
+
+  /// Same-key downloads share one URLSession task; every waiter is completed together.
+  private final class InFlightDownload {
+    var waiters: [(Result<[String: Any?], Error>) -> Void] = []
+    var task: URLSessionDataTask?
+    var canceled = false
+  }
+
+  private var inFlightDownloads: [String: InFlightDownload] = [:]
+  private var inUseDownloadPermits: Int = 0
+  private var pendingDownloadStarts: [() -> Void] = []
+  private var downloadSessionStorage: URLSession?
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let methodChannel = FlutterMethodChannel(
@@ -337,9 +350,9 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     case "configure":
       handleConfigure(args: args, result: result)
     case "downloadFile":
-      queue.async { self.handleDownloadFile(args: args, result: result) }
+      downloadScheduleQueue.async { self.handleDownloadFile(args: args, result: result) }
     case "prefetchAll":
-      queue.async { self.handlePrefetchAll(args: args, result: result) }
+      downloadScheduleQueue.async { self.handlePrefetchAll(args: args, result: result) }
     case "cancelDownload":
       handleCancelDownload(args: args, result: result)
     case "getFileFromCache":
@@ -384,7 +397,9 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     if let v = args["cacheSubdirectory"] as? String, !v.trimmingCharacters(in: .whitespaces).isEmpty {
       cacheSubdirectory = v
     }
-    if let v = (args["maxConcurrentDownloads"] as? NSNumber)?.intValue { maxConcurrentDownloads = v }
+    if let v = (args["maxConcurrentDownloads"] as? NSNumber)?.intValue {
+      updateMaxConcurrentDownloads(v)
+    }
     if let v = (args["connectTimeoutMs"] as? NSNumber)?.intValue { connectTimeoutMs = v }
     if let v = (args["readTimeoutMs"] as? NSNumber)?.intValue { readTimeoutMs = v }
     if let v = args["respectHttpCacheHeaders"] as? Bool { respectHttpCacheHeaders = v }
@@ -420,6 +435,87 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     }
   }
 
+  private struct NetworkDownloadContext {
+    let startMs: Int64
+    let urlString: String
+    let key: String
+    let tag: String?
+    let fileExtension: String?
+    let ttlOverride: Int64?
+    let fallbackToCacheOnError: Bool
+    let pinned: Bool
+    let checksumAlgorithm: String
+    let expectedChecksum: String?
+    let existingRecord: CacheRecord?
+    let urlRequest: URLRequest
+  }
+
+  private func canceledDownloadError() -> NSError {
+    NSError(domain: "CANCELED", code: -2, userInfo: [NSLocalizedDescriptionKey: "Download canceled"])
+  }
+
+  /// Dedicated session so completions stay on URLSession's pool instead of a blocked GCD thread.
+  /// `httpMaximumConnectionsPerHost` is only a ceiling; [acquireDownloadPermit] enforces
+  /// `maxConcurrentDownloads`.
+  private func downloadSession() -> URLSession {
+    lock.lock()
+    defer { lock.unlock() }
+    if let downloadSessionStorage {
+      return downloadSessionStorage
+    }
+    let config = URLSessionConfiguration.default
+    config.requestCachePolicy = .reloadIgnoringLocalCacheData
+    config.urlCache = nil
+    config.httpMaximumConnectionsPerHost = 32
+    let session = URLSession(configuration: config)
+    downloadSessionStorage = session
+    return session
+  }
+
+  private func updateMaxConcurrentDownloads(_ newValue: Int) {
+    let value = max(1, newValue)
+    lock.lock()
+    maxConcurrentDownloads = value
+    var starters: [() -> Void] = []
+    while inUseDownloadPermits < maxConcurrentDownloads && !pendingDownloadStarts.isEmpty {
+      inUseDownloadPermits += 1
+      starters.append(pendingDownloadStarts.removeFirst())
+    }
+    lock.unlock()
+    starters.forEach { $0() }
+  }
+
+  private func acquireDownloadPermit(_ body: @escaping () -> Void) {
+    lock.lock()
+    if inUseDownloadPermits < maxConcurrentDownloads {
+      inUseDownloadPermits += 1
+      lock.unlock()
+      body()
+    } else {
+      pendingDownloadStarts.append(body)
+      lock.unlock()
+    }
+  }
+
+  private func releaseDownloadPermit() {
+    lock.lock()
+    inUseDownloadPermits = max(0, inUseDownloadPermits - 1)
+    var next: (() -> Void)?
+    if inUseDownloadPermits < maxConcurrentDownloads && !pendingDownloadStarts.isEmpty {
+      inUseDownloadPermits += 1
+      next = pendingDownloadStarts.removeFirst()
+    }
+    lock.unlock()
+    next?()
+  }
+
+  private func finishInFlight(key: String, outcome: Result<[String: Any?], Error>) {
+    lock.lock()
+    let flight = inFlightDownloads.removeValue(forKey: key)
+    lock.unlock()
+    flight?.waiters.forEach { $0(outcome) }
+  }
+
   private func executeDownload(
     args: [String: Any],
     completion: @escaping (Result<[String: Any?], Error>) -> Void
@@ -440,33 +536,43 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     let pinned = (args["pinned"] as? Bool) ?? false
     let checksumAlgorithm = (args["checksumAlgorithm"] as? String) ?? "none"
     let expectedChecksum = (args["expectedChecksum"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-
     let key = resolveKey(urlString, customKey: customKey)
-    var existingRecord: CacheRecord?
 
     lock.lock()
-    if var found = entries[key], FileManager.default.fileExists(atPath: found.filePath) {
+    if var found = entries[key], FileManager.default.fileExists(atPath: found.filePath),
+       !forceRefresh && !found.isExpired(nowMs: startMs) {
+      found.lastAccessedAtMs = startMs
+      found.hitCount += 1
+      if let tag = tag { found.tag = tag }
+      if pinned { found.pinned = true }
+      entries[key] = found
+      hitCount += 1
+      schedulePersistIndexLocked()
+      lock.unlock()
+      emitProgress(key: key, url: urlString, state: "cacheHit", bytesReceived: found.sizeBytes, totalBytes: found.sizeBytes, filePath: found.filePath)
+      completion(.success([
+        "entry": found.toMap(),
+        "source": "cacheHit",
+        "httpStatusCode": nil,
+        "elapsedMs": Int64(Date().timeIntervalSince1970 * 1000) - startMs,
+      ]))
+      return
+    }
+
+    if let flight = inFlightDownloads[key] {
+      flight.waiters.append(completion)
+      lock.unlock()
+      return
+    }
+
+    var existingRecord: CacheRecord?
+    if let found = entries[key], FileManager.default.fileExists(atPath: found.filePath) {
       existingRecord = found
-      if !forceRefresh && !found.isExpired(nowMs: startMs) {
-        found.lastAccessedAtMs = startMs
-        found.hitCount += 1
-        if let tag = tag { found.tag = tag }
-        if pinned { found.pinned = true }
-        entries[key] = found
-        hitCount += 1
-        schedulePersistIndexLocked()
-        lock.unlock()
-        emitProgress(key: key, url: urlString, state: "cacheHit", bytesReceived: found.sizeBytes, totalBytes: found.sizeBytes, filePath: found.filePath)
-        completion(.success([
-          "entry": found.toMap(),
-          "source": "cacheHit",
-          "httpStatusCode": nil,
-          "elapsedMs": Int64(Date().timeIntervalSince1970 * 1000) - startMs,
-        ]))
-        return
-      }
     }
     missCount += 1
+    let flight = InFlightDownload()
+    flight.waiters.append(completion)
+    inFlightDownloads[key] = flight
     lock.unlock()
 
     emitProgress(key: key, url: urlString, state: "started", bytesReceived: 0, totalBytes: -1)
@@ -475,13 +581,12 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     urlRequest.httpMethod = "GET"
     urlRequest.timeoutInterval = TimeInterval(connectTimeoutMs + readTimeoutMs) / 1000.0
     urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
-
-    for (k, v) in defaultHeaders {
-      urlRequest.setValue(v, forHTTPHeaderField: k)
+    for (headerName, headerValue) in defaultHeaders {
+      urlRequest.setValue(headerValue, forHTTPHeaderField: headerName)
     }
     if let reqHeaders = args["headers"] as? [String: String] {
-      for (k, v) in reqHeaders {
-        urlRequest.setValue(v, forHTTPHeaderField: k)
+      for (headerName, headerValue) in reqHeaders {
+        urlRequest.setValue(headerValue, forHTTPHeaderField: headerName)
       }
     }
     if respectHttpCacheHeaders, let existing = existingRecord {
@@ -493,46 +598,75 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
       }
     }
 
-    let semaphore = DispatchSemaphore(value: 0)
-    var receivedData: Data?
-    var httpResponse: HTTPURLResponse?
-    var taskError: Error?
-
-    let task = URLSession.shared.dataTask(with: urlRequest) { data, response, error in
-      receivedData = data
-      httpResponse = response as? HTTPURLResponse
-      taskError = error
-      semaphore.signal()
+    let context = NetworkDownloadContext(
+      startMs: startMs,
+      urlString: urlString,
+      key: key,
+      tag: tag,
+      fileExtension: fileExtension,
+      ttlOverride: ttlOverride,
+      fallbackToCacheOnError: fallbackToCacheOnError,
+      pinned: pinned,
+      checksumAlgorithm: checksumAlgorithm,
+      expectedChecksum: expectedChecksum,
+      existingRecord: existingRecord,
+      urlRequest: urlRequest
+    )
+    acquireDownloadPermit { [weak self] in
+      self?.startPermittedDownload(context)
     }
+  }
 
+  private func startPermittedDownload(_ context: NetworkDownloadContext) {
+    let session = downloadSession()
     lock.lock()
-    activeTasks[key] = task
+    guard let flight = inFlightDownloads[context.key], !flight.canceled else {
+      lock.unlock()
+      finishInFlight(key: context.key, outcome: .failure(canceledDownloadError()))
+      releaseDownloadPermit()
+      return
+    }
+    let task = session.dataTask(with: context.urlRequest) { [weak self] data, response, error in
+      guard let self = self else { return }
+      self.finishNetworkDownload(context, data: data, response: response, error: error)
+      self.releaseDownloadPermit()
+    }
+    flight.task = task
     lock.unlock()
-
     task.resume()
-    semaphore.wait()
+  }
 
-    lock.lock()
-    activeTasks.removeValue(forKey: key)
-    lock.unlock()
+  private func finishNetworkDownload(
+    _ context: NetworkDownloadContext,
+    data: Data?,
+    response: URLResponse?,
+    error: Error?
+  ) {
+    let key = context.key
+    let urlString = context.urlString
+    let existingRecord = context.existingRecord
+    let httpResponse = response as? HTTPURLResponse
 
-    if let err = taskError as NSError? {
+    if let err = error as NSError? {
       if err.code == NSURLErrorCancelled {
         emitProgress(key: key, url: urlString, state: "canceled", bytesReceived: 0, totalBytes: -1, errorMessage: "Download canceled")
-        completion(.failure(NSError(domain: "CANCELED", code: -2, userInfo: [NSLocalizedDescriptionKey: "Download canceled"])))
+        finishInFlight(key: key, outcome: .failure(canceledDownloadError()))
         return
       }
-      if fallbackToCacheOnError, let existing = existingRecord, FileManager.default.fileExists(atPath: existing.filePath) {
-        completion(.success([
+      if context.fallbackToCacheOnError, let existing = existingRecord, FileManager.default.fileExists(atPath: existing.filePath) {
+        finishInFlight(key: key, outcome: .success([
           "entry": existing.toMap(),
           "source": "staleCacheFallback",
           "httpStatusCode": nil,
-          "elapsedMs": Int64(Date().timeIntervalSince1970 * 1000) - startMs,
+          "elapsedMs": Int64(Date().timeIntervalSince1970 * 1000) - context.startMs,
         ]))
         return
       }
       emitProgress(key: key, url: urlString, state: "failed", bytesReceived: 0, totalBytes: -1, errorMessage: err.localizedDescription)
-      completion(.failure(NSError(domain: "NETWORK_ERROR", code: err.code, userInfo: [NSLocalizedDescriptionKey: err.localizedDescription])))
+      finishInFlight(
+        key: key,
+        outcome: .failure(NSError(domain: "NETWORK_ERROR", code: err.code, userInfo: [NSLocalizedDescriptionKey: err.localizedDescription]))
+      )
       return
     }
 
@@ -540,14 +674,14 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     if statusCode == 304, var existing = existingRecord {
       let now = Int64(Date().timeIntervalSince1970 * 1000)
       let cacheControl = httpResponse?.value(forHTTPHeaderField: "Cache-Control")
-      let ttlSec = ttlOverride ?? (respectHttpCacheHeaders ? parseMaxAgeSeconds(cacheControl) : nil) ?? defaultTtlSeconds
+      let ttlSec = context.ttlOverride ?? (respectHttpCacheHeaders ? parseMaxAgeSeconds(cacheControl) : nil) ?? defaultTtlSeconds
       existing.lastAccessedAtMs = now
       existing.expiresAtMs = now + ttlSec * 1000
       existing.hitCount += 1
       if let newEtag = httpResponse?.value(forHTTPHeaderField: "ETag") { existing.eTag = newEtag }
       if let newLastMod = httpResponse?.value(forHTTPHeaderField: "Last-Modified") { existing.lastModified = newLastMod }
-      if let tag = tag { existing.tag = tag }
-      if pinned { existing.pinned = true }
+      if let tag = context.tag { existing.tag = tag }
+      if context.pinned { existing.pinned = true }
 
       lock.lock()
       entries[key] = existing
@@ -555,27 +689,30 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
       lock.unlock()
 
       emitProgress(key: key, url: urlString, state: "cacheHit", bytesReceived: existing.sizeBytes, totalBytes: existing.sizeBytes, filePath: existing.filePath)
-      completion(.success([
+      finishInFlight(key: key, outcome: .success([
         "entry": existing.toMap(),
         "source": "revalidated",
         "httpStatusCode": 304,
-        "elapsedMs": now - startMs,
+        "elapsedMs": now - context.startMs,
       ]))
       return
     }
 
-    guard (200...299).contains(statusCode), let payloadData = receivedData else {
-      if fallbackToCacheOnError, let existing = existingRecord, FileManager.default.fileExists(atPath: existing.filePath) {
-        completion(.success([
+    guard (200...299).contains(statusCode), let payloadData = data else {
+      if context.fallbackToCacheOnError, let existing = existingRecord, FileManager.default.fileExists(atPath: existing.filePath) {
+        finishInFlight(key: key, outcome: .success([
           "entry": existing.toMap(),
           "source": "staleCacheFallback",
           "httpStatusCode": statusCode,
-          "elapsedMs": Int64(Date().timeIntervalSince1970 * 1000) - startMs,
+          "elapsedMs": Int64(Date().timeIntervalSince1970 * 1000) - context.startMs,
         ]))
         return
       }
       emitProgress(key: key, url: urlString, state: "failed", bytesReceived: 0, totalBytes: -1, errorMessage: "HTTP \(statusCode)")
-      completion(.failure(NSError(domain: "HTTP_ERROR", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(statusCode) for \(urlString)"])))
+      finishInFlight(
+        key: key,
+        outcome: .failure(NSError(domain: "HTTP_ERROR", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(statusCode) for \(urlString)"]))
+      )
       return
     }
 
@@ -583,31 +720,35 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     emitProgress(key: key, url: urlString, state: "inProgress", bytesReceived: byteCount, totalBytes: byteCount)
 
     var computedHash: String?
-    if checksumAlgorithm != "none" {
-      let hash = computeHash(data: payloadData, algorithm: checksumAlgorithm)
+    if context.checksumAlgorithm != "none" {
+      let hash = computeHash(data: payloadData, algorithm: context.checksumAlgorithm)
       computedHash = hash
-      if let expected = expectedChecksum, !expected.isEmpty, hash.lowercased() != expected {
+      if let expected = context.expectedChecksum, !expected.isEmpty, hash.lowercased() != expected {
         emitProgress(key: key, url: urlString, state: "failed", bytesReceived: byteCount, totalBytes: byteCount, errorMessage: "Checksum mismatch")
-        completion(.failure(NSError(domain: "CHECKSUM_MISMATCH", code: -3, userInfo: [NSLocalizedDescriptionKey: "Checksum mismatch: expected \(expected), got \(hash)"])))
+        finishInFlight(
+          key: key,
+          outcome: .failure(NSError(domain: "CHECKSUM_MISMATCH", code: -3, userInfo: [NSLocalizedDescriptionKey: "Checksum mismatch: expected \(expected), got \(hash)"]))
+        )
         return
       }
     }
 
     let contentType = httpResponse?.value(forHTTPHeaderField: "Content-Type")?.components(separatedBy: ";").first?.trimmingCharacters(in: .whitespaces)
-    let ext = inferExtension(url: urlString, mimeType: contentType, explicitExtension: fileExtension)
+    let ext = inferExtension(url: urlString, mimeType: contentType, explicitExtension: context.fileExtension)
     let destURL = getCacheRootURL().appendingPathComponent("\(key).\(ext)")
-
     do {
       try payloadData.write(to: destURL, options: .atomic)
     } catch {
-      completion(.failure(NSError(domain: "DISK_WRITE_ERROR", code: -4, userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])))
+      finishInFlight(
+        key: key,
+        outcome: .failure(NSError(domain: "DISK_WRITE_ERROR", code: -4, userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]))
+      )
       return
     }
 
     let now = Int64(Date().timeIntervalSince1970 * 1000)
     let cacheControl = httpResponse?.value(forHTTPHeaderField: "Cache-Control")
-    let ttlSec = ttlOverride ?? (respectHttpCacheHeaders ? parseMaxAgeSeconds(cacheControl) : nil) ?? defaultTtlSeconds
-
+    let ttlSec = context.ttlOverride ?? (respectHttpCacheHeaders ? parseMaxAgeSeconds(cacheControl) : nil) ?? defaultTtlSeconds
     let record = CacheRecord(
       key: key,
       url: urlString,
@@ -617,13 +758,13 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
       lastAccessedAtMs: now,
       expiresAtMs: now + ttlSec * 1000,
       hitCount: 1,
-      tag: tag,
+      tag: context.tag,
       mimeType: contentType ?? "application/octet-stream",
       eTag: httpResponse?.value(forHTTPHeaderField: "ETag"),
       lastModified: httpResponse?.value(forHTTPHeaderField: "Last-Modified"),
       checksum: computedHash,
-      checksumAlgorithm: checksumAlgorithm,
-      pinned: pinned
+      checksumAlgorithm: context.checksumAlgorithm,
+      pinned: context.pinned
     )
 
     lock.lock()
@@ -642,30 +783,36 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     lock.unlock()
 
     emitProgress(key: key, url: urlString, state: "completed", bytesReceived: byteCount, totalBytes: byteCount, filePath: destURL.path)
-    completion(.success([
+    finishInFlight(key: key, outcome: .success([
       "entry": record.toMap(),
       "source": "networkDownload",
       "httpStatusCode": statusCode,
-      "elapsedMs": Int64(Date().timeIntervalSince1970 * 1000) - startMs,
+      "elapsedMs": Int64(Date().timeIntervalSince1970 * 1000) - context.startMs,
     ]))
   }
 
   private func handlePrefetchAll(args: [String: Any], result: @escaping FlutterResult) {
     let requests = args["requests"] as? [[String: Any]] ?? []
-    var entriesList: [[String: Any?]] = []
-    for req in requests {
-      let group = DispatchGroup()
+    if requests.isEmpty {
+      DispatchQueue.main.async { result([]) }
+      return
+    }
+    let group = DispatchGroup()
+    let listLock = NSLock()
+    var slots: [[String: Any?]?] = Array(repeating: nil, count: requests.count)
+    for (index, req) in requests.enumerated() {
       group.enter()
       executeDownload(args: req) { outcome in
         if case .success(let map) = outcome, let entry = map["entry"] as? [String: Any?] {
-          entriesList.append(entry)
+          listLock.lock()
+          slots[index] = entry
+          listLock.unlock()
         }
         group.leave()
       }
-      group.wait()
     }
-    DispatchQueue.main.async {
-      result(entriesList)
+    group.notify(queue: .main) {
+      result(slots.compactMap { $0 })
     }
   }
 
@@ -673,12 +820,15 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     let keyOrUrl = args["keyOrUrl"] as? String ?? ""
     let key = resolveKey(keyOrUrl)
     lock.lock()
-    let task = activeTasks.removeValue(forKey: key) ?? activeTasks.removeValue(forKey: keyOrUrl)
-    lock.unlock()
-    if let task = task {
-      task.cancel()
+    let flight = inFlightDownloads[key] ?? inFlightDownloads[keyOrUrl]
+    if let flight = flight {
+      flight.canceled = true
+      let task = flight.task
+      lock.unlock()
+      task?.cancel()
       result(true)
     } else {
+      lock.unlock()
       result(false)
     }
   }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'src/cache_hash_utils.dart';
 import 'src/cache_models.dart';
 import 'xue_hua_navite_cache_manager_platform_interface.dart';
 
@@ -21,8 +22,23 @@ class XueHuaNaviteCacheManager {
   /// Shared singleton instance of [XueHuaNaviteCacheManager].
   static final XueHuaNaviteCacheManager instance = XueHuaNaviteCacheManager();
 
+  final Map<String, Future<CacheFetchResult>> _inFlightDownloads =
+      <String, Future<CacheFetchResult>>{};
+
   XueHuaNaviteCacheManagerPlatform get _platform =>
       XueHuaNaviteCacheManagerPlatform.instance;
+
+  /// Cache key shared by concurrent [downloadFile] calls.
+  ///
+  /// Matches the native resolver: a non-empty `customKey`, otherwise the
+  /// SHA-256 of the URL. Callers that share this key observe one transfer.
+  String _coalesceKey(CacheRequest request) {
+    final String? custom = request.customKey?.trim();
+    if (custom != null && custom.isNotEmpty) {
+      return custom;
+    }
+    return CacheHashUtils.sha256String(request.url);
+  }
 
   /// Broadcast stream of real-time download progress and cache lifecycle events.
   Stream<CacheProgressEvent> get progressStream => _platform.progressStream;
@@ -44,8 +60,25 @@ class XueHuaNaviteCacheManager {
   /// Fetches a network file using [request] and returns a [CacheFetchResult] containing
   /// the resolved [CacheEntry], [CacheResultSource] (`cacheHit`, `revalidated`,
   /// `networkDownload`, or `staleCacheFallback`), HTTP status code, and elapsed duration.
+  ///
+  /// Concurrent calls that resolve to the same cache key share one in-flight
+  /// download. The first request's options drive that transfer; every waiter
+  /// receives the same result. Native implementations apply the same coalescing,
+  /// so overlapping `prefetchAll` and [CachedNetworkImage] loads do not fetch twice.
   Future<CacheFetchResult> downloadFile(CacheRequest request) {
-    return _platform.downloadFile(request);
+    final String key = _coalesceKey(request);
+    final Future<CacheFetchResult>? existing = _inFlightDownloads[key];
+    if (existing != null) {
+      return existing;
+    }
+    late final Future<CacheFetchResult> future;
+    future = _platform.downloadFile(request).whenComplete(() {
+      if (identical(_inFlightDownloads[key], future)) {
+        _inFlightDownloads.remove(key);
+      }
+    });
+    _inFlightDownloads[key] = future;
+    return future;
   }
 
   /// Convenience method that fetches or retrieves a cached network file from [url]

@@ -476,14 +476,35 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
 
   @override
   Future<List<CacheEntry>> prefetchAll(List<CacheRequest> requests) async {
-    final results = <CacheEntry>[];
-    for (final request in requests) {
-      try {
-        final res = await downloadFile(request);
-        results.add(res.entry);
-      } catch (_) {}
+    if (requests.isEmpty) {
+      return const <CacheEntry>[];
     }
-    return results;
+    final int configured = _config.maxConcurrentDownloads;
+    final int limit = configured < 1 ? 1 : configured;
+    final int workers = requests.length < limit ? requests.length : limit;
+    final List<CacheEntry?> slots = List<CacheEntry?>.filled(
+      requests.length,
+      null,
+    );
+    var cursor = 0;
+    Future<void> worker() async {
+      while (true) {
+        final int index = cursor;
+        cursor += 1;
+        if (index >= requests.length) {
+          return;
+        }
+        try {
+          final CacheFetchResult result = await downloadFile(requests[index]);
+          slots[index] = result.entry;
+        } catch (_) {}
+      }
+    }
+
+    await Future.wait<void>(
+      List<Future<void>>.generate(workers, (_) => worker()),
+    );
+    return slots.whereType<CacheEntry>().toList(growable: false);
   }
 
   @override

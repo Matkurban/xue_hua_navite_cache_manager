@@ -6,16 +6,23 @@
 #include <gtk/gtk.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <queue>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include "xue_hua_navite_cache_manager_plugin_private.h"
@@ -193,6 +200,7 @@ std::string g_eviction_policy = "lru";
 std::string g_cache_subdirectory = "xue_hua_network_cache";
 int g_connect_timeout_ms = 15000;
 int g_read_timeout_ms = 30000;
+int g_max_concurrent_downloads = 4;
 bool g_respect_http_cache_headers = true;
 bool g_auto_trim_on_write = true;
 
@@ -407,62 +415,296 @@ bool DownloadViaCurlOrGio(const std::string& url,
   return false;
 }
 
-FlMethodResponse* HandleDownloadRequest(XueHuaNaviteCacheManagerPlugin* self,
-                                        FlValue* args) {
-  int64_t start_ms = CurrentTimeMs();
-  std::string url = GetFlString(args, "url");
-  if (url.empty()) {
-    return FL_METHOD_RESPONSE(fl_method_error_response_new(
-        "INVALID_URL", "URL is required", nullptr));
-  }
-  std::string custom_key = GetFlString(args, "customKey");
-  std::string tag = GetFlString(args, "tag");
-  std::string file_ext = GetFlString(args, "fileExtension");
-  bool has_ttl = HasFlKey(args, "ttlSeconds");
-  int64_t ttl_sec = GetFlInt(args, "ttlSeconds", g_default_ttl_seconds);
-  bool force_refresh = GetFlBool(args, "forceRefresh", false);
-  bool fallback_on_error = GetFlBool(args, "fallbackToCacheOnError", true);
-  bool pinned = GetFlBool(args, "pinned", false);
-  std::string checksum_alg = GetFlString(args, "checksumAlgorithm", "none");
-  std::string expected_checksum = GetFlString(args, "expectedChecksum");
+struct DownloadRequest {
+  std::string url;
+  std::string custom_key;
+  std::string tag;
+  std::string file_ext;
+  bool has_ttl = false;
+  int64_t ttl_sec = 0;
+  bool force_refresh = false;
+  bool fallback_on_error = true;
+  bool pinned = false;
+  std::string checksum_alg = "none";
+  std::string expected_checksum;
+};
 
+struct DownloadOutcome {
+  bool ok = false;
+  std::string error_code;
+  std::string error_message;
+  LinuxCacheRecord entry;
+  std::string source;
+  bool has_http_status = false;
+  int http_status = 0;
+  int64_t elapsed_ms = 0;
+};
+
+struct InFlightDownload {
+  std::shared_ptr<std::atomic<bool>> cancel_flag =
+      std::make_shared<std::atomic<bool>>(false);
+  std::vector<std::function<void(const DownloadOutcome&)>> waiters;
+};
+
+std::map<std::string, std::shared_ptr<InFlightDownload>> g_in_flight;
+
+class DownloadPool {
+ public:
+  DownloadPool() = default;
+  DownloadPool(const DownloadPool&) = delete;
+  DownloadPool& operator=(const DownloadPool&) = delete;
+
+  ~DownloadPool() {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      stopping_ = true;
+    }
+    cv_.notify_all();
+    for (auto& worker : workers_) {
+      if (worker.joinable()) worker.join();
+    }
+  }
+
+  void SetLimit(int limit) {
+    if (limit < 1) limit = 1;
+    std::lock_guard<std::mutex> lock(mu_);
+    limit_ = limit;
+    EnsureWorkersLocked();
+    cv_.notify_all();
+  }
+
+  bool Post(std::function<void()> job) {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      if (stopping_) return false;
+      EnsureWorkersLocked();
+      jobs_.push(std::move(job));
+    }
+    cv_.notify_one();
+    return true;
+  }
+
+ private:
+  void EnsureWorkersLocked() {
+    while (static_cast<int>(workers_.size()) < limit_) {
+      workers_.emplace_back([this]() { Loop(); });
+    }
+  }
+
+  void Loop() {
+    for (;;) {
+      std::function<void()> job;
+      {
+        std::unique_lock<std::mutex> lock(mu_);
+        cv_.wait(lock, [this]() {
+          return (stopping_ && jobs_.empty()) ||
+                 (!jobs_.empty() && active_ < limit_);
+        });
+        if (jobs_.empty()) return;
+        job = std::move(jobs_.front());
+        jobs_.pop();
+        active_ += 1;
+      }
+      try {
+        job();
+      } catch (...) {
+      }
+      {
+        std::lock_guard<std::mutex> lock(mu_);
+        active_ -= 1;
+      }
+      cv_.notify_all();
+    }
+  }
+
+  std::mutex mu_;
+  std::condition_variable cv_;
+  std::queue<std::function<void()>> jobs_;
+  std::vector<std::thread> workers_;
+  int limit_ = 4;
+  int active_ = 0;
+  bool stopping_ = false;
+};
+
+DownloadPool& GetDownloadPool() {
+  static DownloadPool pool;
+  return pool;
+}
+
+struct ProgressPayload {
+  XueHuaNaviteCacheManagerPlugin* self = nullptr;
   std::string key;
+  std::string url;
+  std::string state;
+  std::string file_path;
+  std::string error;
+  int64_t bytes = 0;
+  int64_t total = 0;
+};
+
+static gboolean ProgressOnMain(gpointer data) {
+  std::unique_ptr<ProgressPayload> payload(static_cast<ProgressPayload*>(data));
+  EmitProgress(payload->self, payload->key, payload->url, payload->state,
+               payload->bytes, payload->total, payload->file_path,
+               payload->error);
+  g_object_unref(payload->self);
+  return G_SOURCE_REMOVE;
+}
+
+void PostProgress(XueHuaNaviteCacheManagerPlugin* self,
+                  const std::string& key,
+                  const std::string& url,
+                  const std::string& state,
+                  int64_t bytes,
+                  int64_t total,
+                  const std::string& file_path = "",
+                  const std::string& error = "") {
+  if (!self) return;
+  auto* payload = new ProgressPayload();
+  payload->self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(g_object_ref(self));
+  payload->key = key;
+  payload->url = url;
+  payload->state = state;
+  payload->bytes = bytes;
+  payload->total = total;
+  payload->file_path = file_path;
+  payload->error = error;
+  g_idle_add(ProgressOnMain, payload);
+}
+
+DownloadOutcome MakeFailure(const std::string& code, const std::string& message) {
+  DownloadOutcome out;
+  out.ok = false;
+  out.error_code = code;
+  out.error_message = message;
+  return out;
+}
+
+DownloadOutcome MakeSuccess(const LinuxCacheRecord& entry,
+                            const std::string& source,
+                            bool has_http_status,
+                            int http_status,
+                            int64_t elapsed_ms) {
+  DownloadOutcome out;
+  out.ok = true;
+  out.entry = entry;
+  out.source = source;
+  out.has_http_status = has_http_status;
+  out.http_status = http_status;
+  out.elapsed_ms = elapsed_ms;
+  return out;
+}
+
+DownloadRequest ParseDownloadRequest(FlValue* args) {
+  DownloadRequest request;
+  request.url = GetFlString(args, "url");
+  request.custom_key = GetFlString(args, "customKey");
+  request.tag = GetFlString(args, "tag");
+  request.file_ext = GetFlString(args, "fileExtension");
+  request.has_ttl = HasFlKey(args, "ttlSeconds");
+  request.ttl_sec = GetFlInt(args, "ttlSeconds", g_default_ttl_seconds);
+  request.force_refresh = GetFlBool(args, "forceRefresh", false);
+  request.fallback_on_error = GetFlBool(args, "fallbackToCacheOnError", true);
+  request.pinned = GetFlBool(args, "pinned", false);
+  request.checksum_alg = GetFlString(args, "checksumAlgorithm", "none");
+  request.expected_checksum = GetFlString(args, "expectedChecksum");
+  return request;
+}
+
+FlMethodResponse* OutcomeToResponse(const DownloadOutcome& outcome) {
+  if (!outcome.ok) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new(
+        outcome.error_code.c_str(), outcome.error_message.c_str(), nullptr));
+  }
+  g_autoptr(FlValue) res = fl_value_new_map();
+  fl_value_set_string_take(res, "entry", outcome.entry.ToFlValue());
+  fl_value_set_string_take(res, "source",
+                           fl_value_new_string(outcome.source.c_str()));
+  if (outcome.has_http_status) {
+    fl_value_set_string_take(res, "httpStatusCode",
+                             fl_value_new_int(outcome.http_status));
+  } else {
+    fl_value_set_string_take(res, "httpStatusCode", fl_value_new_null());
+  }
+  fl_value_set_string_take(res, "elapsedMs", fl_value_new_int(outcome.elapsed_ms));
+  return FL_METHOD_RESPONSE(fl_method_success_response_new(res));
+}
+
+struct AsyncDownloadReply {
+  FlMethodCall* method_call = nullptr;
+  DownloadOutcome outcome;
+};
+
+static gboolean DeliverDownloadReply(gpointer data) {
+  std::unique_ptr<AsyncDownloadReply> reply(static_cast<AsyncDownloadReply*>(data));
+  g_autoptr(FlMethodResponse) response = OutcomeToResponse(reply->outcome);
+  fl_method_call_respond(reply->method_call, response, nullptr);
+  g_object_unref(reply->method_call);
+  return G_SOURCE_REMOVE;
+}
+
+struct AsyncPrefetchReply {
+  FlMethodCall* method_call = nullptr;
+  std::vector<DownloadOutcome> outcomes;
+};
+
+static gboolean DeliverPrefetchReply(gpointer data) {
+  std::unique_ptr<AsyncPrefetchReply> reply(static_cast<AsyncPrefetchReply*>(data));
+  g_autoptr(FlValue) list = fl_value_new_list();
+  for (const auto& outcome : reply->outcomes) {
+    if (!outcome.ok) continue;
+    fl_value_append_take(list, outcome.entry.ToFlValue());
+  }
+  g_autoptr(FlMethodResponse) response =
+      FL_METHOD_RESPONSE(fl_method_success_response_new(list));
+  fl_method_call_respond(reply->method_call, response, nullptr);
+  g_object_unref(reply->method_call);
+  return G_SOURCE_REMOVE;
+}
+
+DownloadOutcome ExecuteDownload(
+    XueHuaNaviteCacheManagerPlugin* self,
+    const DownloadRequest& request,
+    const std::string& key,
+    const std::shared_ptr<std::atomic<bool>>& cancel_flag) {
+  const int64_t start_ms = CurrentTimeMs();
   LinuxCacheRecord existing;
   bool has_existing = false;
 
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     EnsureIndexLoadedLocked();
-    key = ResolveKeyLocked(url, custom_key);
     auto it = g_entries.find(key);
     if (it != g_entries.end() &&
         g_file_test(it->second.file_path.c_str(), G_FILE_TEST_EXISTS)) {
       existing = it->second;
       has_existing = true;
-      if (!force_refresh && !it->second.IsExpired(start_ms)) {
+      if (!request.force_refresh && !it->second.IsExpired(start_ms)) {
         it->second.last_accessed_at_ms = start_ms;
         it->second.hit_count++;
-        if (!tag.empty()) it->second.tag = tag;
-        if (pinned) it->second.pinned = true;
+        if (!request.tag.empty()) it->second.tag = request.tag;
+        if (request.pinned) it->second.pinned = true;
         g_hit_count++;
         PersistIndexLocked();
-
-        EmitProgress(self, key, url, "cacheHit", it->second.size_bytes,
-                     it->second.size_bytes, it->second.file_path);
-        g_autoptr(FlValue) res = fl_value_new_map();
-        fl_value_set_string_take(res, "entry", it->second.ToFlValue());
-        fl_value_set_string_take(res, "source",
-                                 fl_value_new_string("cacheHit"));
-        fl_value_set_string_take(res, "httpStatusCode", fl_value_new_null());
-        fl_value_set_string_take(res, "elapsedMs",
-                                 fl_value_new_int(CurrentTimeMs() - start_ms));
-        return FL_METHOD_RESPONSE(fl_method_success_response_new(res));
+        existing = it->second;
+        // Emit after releasing the lock, via the main loop.
+        has_existing = true;
+        PostProgress(self, key, request.url, "cacheHit", existing.size_bytes,
+                     existing.size_bytes, existing.file_path);
+        return MakeSuccess(existing, "cacheHit", false, 0,
+                           CurrentTimeMs() - start_ms);
       }
     }
     g_miss_count++;
   }
 
-  EmitProgress(self, key, url, "started", 0, -1);
+  if (cancel_flag && cancel_flag->load()) {
+    PostProgress(self, key, request.url, "canceled", 0, -1, "",
+                 "Download canceled");
+    return MakeFailure("CANCELED", "Download canceled");
+  }
+
+  PostProgress(self, key, request.url, "started", 0, -1);
   std::string tmp_path = GetCacheRootDir() + "/" + key + ".tmp";
   std::string dl_err;
   int timeout_sec = (g_connect_timeout_ms + g_read_timeout_ms) / 1000;
@@ -485,66 +727,71 @@ FlMethodResponse* HandleDownloadRequest(XueHuaNaviteCacheManagerPlugin* self,
     }
   }
 
-  if (!DownloadViaCurlOrGio(url, tmp_path, timeout_sec, extra_headers,
+  if (!DownloadViaCurlOrGio(request.url, tmp_path, timeout_sec, extra_headers,
                             &dl_err)) {
     std::remove(tmp_path.c_str());
-    if (fallback_on_error && has_existing) {
-      g_autoptr(FlValue) res = fl_value_new_map();
-      fl_value_set_string_take(res, "entry", existing.ToFlValue());
-      fl_value_set_string_take(res, "source",
-                               fl_value_new_string("staleCacheFallback"));
-      fl_value_set_string_take(res, "httpStatusCode", fl_value_new_null());
-      fl_value_set_string_take(res, "elapsedMs",
-                               fl_value_new_int(CurrentTimeMs() - start_ms));
-      return FL_METHOD_RESPONSE(fl_method_success_response_new(res));
+    if (cancel_flag && cancel_flag->load()) {
+      PostProgress(self, key, request.url, "canceled", 0, -1, "",
+                   "Download canceled");
+      return MakeFailure("CANCELED", "Download canceled");
     }
-    EmitProgress(self, key, url, "failed", 0, -1, "", dl_err);
-    return FL_METHOD_RESPONSE(fl_method_error_response_new(
-        "DOWNLOAD_FAILED", dl_err.c_str(), nullptr));
+    if (request.fallback_on_error && has_existing) {
+      return MakeSuccess(existing, "staleCacheFallback", false, 0,
+                         CurrentTimeMs() - start_ms);
+    }
+    PostProgress(self, key, request.url, "failed", 0, -1, "", dl_err);
+    return MakeFailure("DOWNLOAD_FAILED", dl_err);
+  }
+
+  if (cancel_flag && cancel_flag->load()) {
+    std::remove(tmp_path.c_str());
+    PostProgress(self, key, request.url, "canceled", 0, -1, "",
+                 "Download canceled");
+    return MakeFailure("CANCELED", "Download canceled");
   }
 
   gchar* contents = nullptr;
   gsize length = 0;
   if (!g_file_get_contents(tmp_path.c_str(), &contents, &length, nullptr)) {
     std::remove(tmp_path.c_str());
-    return FL_METHOD_RESPONSE(fl_method_error_response_new(
-        "READ_ERROR", "Failed to read downloaded file", nullptr));
+    return MakeFailure("READ_ERROR", "Failed to read downloaded file");
   }
 
   std::string computed_hash;
-  if (checksum_alg != "none") {
+  if (request.checksum_alg != "none") {
     computed_hash = ComputeGLibHash(reinterpret_cast<const uint8_t*>(contents),
-                                    length, checksum_alg);
-    if (!expected_checksum.empty() && computed_hash != expected_checksum) {
+                                    length, request.checksum_alg);
+    if (!request.expected_checksum.empty() &&
+        computed_hash != request.expected_checksum) {
       g_free(contents);
       std::remove(tmp_path.c_str());
-      EmitProgress(self, key, url, "failed", 0, -1, "", "Checksum mismatch");
-      return FL_METHOD_RESPONSE(fl_method_error_response_new(
-          "CHECKSUM_MISMATCH", "Checksum verification failed", nullptr));
+      PostProgress(self, key, request.url, "failed", 0, -1, "",
+                   "Checksum mismatch");
+      return MakeFailure("CHECKSUM_MISMATCH", "Checksum verification failed");
     }
   }
   g_free(contents);
 
-  std::string ext = InferExtension(url, "", file_ext);
+  std::string ext = InferExtension(request.url, "", request.file_ext);
   std::string final_path = GetCacheRootDir() + "/" + key + "." + ext;
   std::rename(tmp_path.c_str(), final_path.c_str());
 
   int64_t now = CurrentTimeMs();
   LinuxCacheRecord rec;
   rec.key = key;
-  rec.url = url;
+  rec.url = request.url;
   rec.file_path = final_path;
   rec.size_bytes = static_cast<int64_t>(length);
   rec.created_at_ms = now;
   rec.last_accessed_at_ms = now;
   rec.expires_at_ms =
-      now + (has_ttl ? ttl_sec : g_default_ttl_seconds) * 1000LL;
+      now + (request.has_ttl ? request.ttl_sec : g_default_ttl_seconds) * 1000LL;
   rec.hit_count = 1;
-  rec.tag = tag;
+  rec.tag = request.tag;
   rec.mime_type = "application/octet-stream";
   rec.checksum = computed_hash;
-  rec.checksum_algorithm = checksum_alg;
-  rec.pinned = pinned;
+  rec.checksum_algorithm = request.checksum_alg;
+  rec.pinned = request.pinned;
 
   {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -555,17 +802,162 @@ FlMethodResponse* HandleDownloadRequest(XueHuaNaviteCacheManagerPlugin* self,
     PersistIndexLocked();
   }
 
-  EmitProgress(self, key, url, "completed", rec.size_bytes, rec.size_bytes,
-               rec.file_path);
+  PostProgress(self, key, request.url, "completed", rec.size_bytes,
+               rec.size_bytes, rec.file_path);
+  return MakeSuccess(rec, "networkDownload", true, 200, CurrentTimeMs() - start_ms);
+}
 
-  g_autoptr(FlValue) res = fl_value_new_map();
-  fl_value_set_string_take(res, "entry", rec.ToFlValue());
-  fl_value_set_string_take(res, "source",
-                           fl_value_new_string("networkDownload"));
-  fl_value_set_string_take(res, "httpStatusCode", fl_value_new_int(200));
-  fl_value_set_string_take(res, "elapsedMs",
-                           fl_value_new_int(CurrentTimeMs() - start_ms));
-  return FL_METHOD_RESPONSE(fl_method_success_response_new(res));
+void FinishInFlight(const std::string& key,
+                    const std::shared_ptr<InFlightDownload>& state,
+                    const DownloadOutcome& outcome) {
+  std::vector<std::function<void(const DownloadOutcome&)>> waiters;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto it = g_in_flight.find(key);
+    if (it != g_in_flight.end() && it->second == state) {
+      waiters.swap(it->second->waiters);
+      g_in_flight.erase(it);
+    } else if (state) {
+      waiters.swap(state->waiters);
+    }
+  }
+  for (const auto& waiter : waiters) {
+    waiter(outcome);
+  }
+}
+
+void ScheduleDownload(XueHuaNaviteCacheManagerPlugin* self,
+                      const DownloadRequest& request,
+                      std::function<void(const DownloadOutcome&)> callback) {
+  if (request.url.empty()) {
+    callback(MakeFailure("INVALID_URL", "URL is required"));
+    return;
+  }
+
+  std::string key;
+  DownloadOutcome early;
+  bool has_early = false;
+  std::shared_ptr<InFlightDownload> state;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    EnsureIndexLoadedLocked();
+    key = ResolveKeyLocked(request.url, request.custom_key);
+    if (!request.force_refresh) {
+      auto it = g_entries.find(key);
+      const int64_t now = CurrentTimeMs();
+      if (it != g_entries.end() &&
+          g_file_test(it->second.file_path.c_str(), G_FILE_TEST_EXISTS) &&
+          !it->second.IsExpired(now)) {
+        it->second.last_accessed_at_ms = now;
+        it->second.hit_count++;
+        if (!request.tag.empty()) it->second.tag = request.tag;
+        if (request.pinned) it->second.pinned = true;
+        g_hit_count++;
+        PersistIndexLocked();
+        early = MakeSuccess(it->second, "cacheHit", false, 0, 0);
+        has_early = true;
+      }
+    }
+    if (!has_early) {
+      auto existing = g_in_flight.find(key);
+      if (existing != g_in_flight.end()) {
+        existing->second->waiters.push_back(std::move(callback));
+        return;
+      }
+      state = std::make_shared<InFlightDownload>();
+      state->waiters.push_back(std::move(callback));
+      g_in_flight[key] = state;
+    }
+  }
+
+  if (has_early) {
+    EmitProgress(self, key, request.url, "cacheHit", early.entry.size_bytes,
+                 early.entry.size_bytes, early.entry.file_path);
+    callback(early);
+    return;
+  }
+
+  XueHuaNaviteCacheManagerPlugin* plugin =
+      XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(g_object_ref(self));
+  const bool queued = GetDownloadPool().Post([plugin, request, key, state]() {
+    DownloadOutcome outcome;
+    try {
+      if (state->cancel_flag->load()) {
+        outcome = MakeFailure("CANCELED", "Download canceled");
+        PostProgress(plugin, key, request.url, "canceled", 0, -1, "",
+                     "Download canceled");
+      } else {
+        outcome = ExecuteDownload(plugin, request, key, state->cancel_flag);
+      }
+    } catch (const std::exception& ex) {
+      outcome = MakeFailure("DOWNLOAD_FAILED", ex.what());
+    } catch (...) {
+      outcome = MakeFailure("DOWNLOAD_FAILED", "Download failed");
+    }
+    FinishInFlight(key, state, outcome);
+    g_object_unref(plugin);
+  });
+  if (!queued) {
+    FinishInFlight(key, state, MakeFailure("DOWNLOAD_FAILED", "Download pool is stopping"));
+    g_object_unref(plugin);
+  }
+}
+
+void ScheduleDownloadReply(XueHuaNaviteCacheManagerPlugin* self,
+                           FlMethodCall* method_call,
+                           const DownloadRequest& request) {
+  g_object_ref(method_call);
+  ScheduleDownload(self, request, [method_call](const DownloadOutcome& outcome) {
+    auto* reply = new AsyncDownloadReply();
+    reply->method_call = method_call;
+    reply->outcome = outcome;
+    g_idle_add(DeliverDownloadReply, reply);
+  });
+}
+
+void SchedulePrefetchReply(XueHuaNaviteCacheManagerPlugin* self,
+                           FlMethodCall* method_call,
+                           const std::vector<DownloadRequest>& requests) {
+  g_object_ref(method_call);
+  if (requests.empty()) {
+    auto* reply = new AsyncPrefetchReply();
+    reply->method_call = method_call;
+    g_idle_add(DeliverPrefetchReply, reply);
+    return;
+  }
+  struct PrefetchState {
+    std::mutex mu;
+    int remaining = 0;
+    std::vector<DownloadOutcome> slots;
+    bool posted = false;
+  };
+  auto prefetch_state = std::make_shared<PrefetchState>();
+  prefetch_state->remaining = static_cast<int>(requests.size());
+  prefetch_state->slots.resize(requests.size());
+  for (size_t index = 0; index < requests.size(); ++index) {
+    ScheduleDownload(
+        self, requests[index],
+        [method_call, prefetch_state, index](const DownloadOutcome& outcome) {
+          bool done = false;
+          std::vector<DownloadOutcome> slots;
+          {
+            std::lock_guard<std::mutex> lock(prefetch_state->mu);
+            prefetch_state->slots[index] = outcome;
+            prefetch_state->remaining -= 1;
+            if (prefetch_state->remaining == 0 && !prefetch_state->posted) {
+              prefetch_state->posted = true;
+              done = true;
+              slots = prefetch_state->slots;
+            }
+          }
+          if (done) {
+            auto* reply = new AsyncPrefetchReply();
+            reply->method_call = method_call;
+            reply->outcomes = std::move(slots);
+            g_idle_add(DeliverPrefetchReply, reply);
+          }
+        });
+  }
 }
 
 }  // namespace
@@ -617,34 +1009,49 @@ static void xue_hua_navite_cache_manager_plugin_handle_method_call(
         GetFlInt(args, "connectTimeoutMs", g_connect_timeout_ms));
     g_read_timeout_ms = static_cast<int>(
         GetFlInt(args, "readTimeoutMs", g_read_timeout_ms));
+    if (HasFlKey(args, "maxConcurrentDownloads")) {
+      int conc = static_cast<int>(
+          GetFlInt(args, "maxConcurrentDownloads", g_max_concurrent_downloads));
+      if (conc < 1) conc = 1;
+      g_max_concurrent_downloads = conc;
+      GetDownloadPool().SetLimit(conc);
+    }
     if (g_auto_trim_on_write) {
       EnforceQuotaLocked(g_max_disk_cache_bytes, "");
       PersistIndexLocked();
     }
     response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
   } else if (strcmp(method, "downloadFile") == 0) {
-    response = HandleDownloadRequest(self, args);
+    DownloadRequest request = ParseDownloadRequest(args);
+    ScheduleDownloadReply(self, method_call, request);
+    return;
   } else if (strcmp(method, "prefetchAll") == 0) {
-    g_autoptr(FlValue) list = fl_value_new_list();
+    std::vector<DownloadRequest> requests;
     FlValue* reqs = fl_value_lookup_string(args, "requests");
     if (reqs && fl_value_get_type(reqs) == FL_VALUE_TYPE_LIST) {
       size_t len = fl_value_get_length(reqs);
+      requests.reserve(len);
       for (size_t i = 0; i < len; ++i) {
-        FlValue* item = fl_value_get_list_value(reqs, i);
-        g_autoptr(FlMethodResponse) sub_res = HandleDownloadRequest(self, item);
-        if (FL_IS_METHOD_SUCCESS_RESPONSE(sub_res)) {
-          FlValue* val = fl_method_success_response_get_result(
-              FL_METHOD_SUCCESS_RESPONSE(sub_res));
-          FlValue* entry = fl_value_lookup_string(val, "entry");
-          if (entry) {
-            fl_value_append(list, entry);
-          }
-        }
+        requests.push_back(ParseDownloadRequest(fl_value_get_list_value(reqs, i)));
       }
     }
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(list));
+    SchedulePrefetchReply(self, method_call, requests);
+    return;
   } else if (strcmp(method, "cancelDownload") == 0) {
-    g_autoptr(FlValue) res = fl_value_new_bool(false);
+    std::string key_or_url = GetFlString(args, "keyOrUrl");
+    bool canceled = false;
+    {
+      std::lock_guard<std::mutex> lock(g_mutex);
+      EnsureIndexLoadedLocked();
+      std::string key = ResolveKeyLocked(key_or_url);
+      auto it = g_in_flight.find(key);
+      if (it == g_in_flight.end()) it = g_in_flight.find(key_or_url);
+      if (it != g_in_flight.end()) {
+        it->second->cancel_flag->store(true);
+        canceled = true;
+      }
+    }
+    g_autoptr(FlValue) res = fl_value_new_bool(canceled);
     response = FL_METHOD_RESPONSE(fl_method_success_response_new(res));
   } else if (strcmp(method, "getFileFromCache") == 0) {
     std::lock_guard<std::mutex> lock(g_mutex);

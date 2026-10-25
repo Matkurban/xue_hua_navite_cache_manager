@@ -494,6 +494,17 @@ class FullMockCachePlatform
   }
 }
 
+class _CountingDelayPlatform extends FullMockCachePlatform {
+  int downloadCalls = 0;
+
+  @override
+  Future<CacheFetchResult> downloadFile(CacheRequest request) async {
+    downloadCalls += 1;
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    return super.downloadFile(request);
+  }
+}
+
 void main() {
   final XueHuaNaviteCacheManagerPlatform initialPlatform =
       XueHuaNaviteCacheManagerPlatform.instance;
@@ -757,7 +768,12 @@ void main() {
         ),
       );
 
-      // Allow async codec resolution and settle frames
+      // Codec resolution touches real file IO and root-zone futures, which
+      // pumpAndSettle's fake async clock does not flush on its own.
+      await tester.pump();
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      });
       await tester.pumpAndSettle();
 
       expect(find.byType(CachedNetworkImage), findsNWidgets(2));
@@ -773,6 +789,49 @@ void main() {
         await XueHuaNaviteCacheManager.instance.containsKey('avatar_1'),
         isFalse,
       );
+    },
+  );
+
+  test(
+    'downloadFile coalesces concurrent requests that share a cache key',
+    () async {
+      final mock = _CountingDelayPlatform();
+      XueHuaNaviteCacheManagerPlatform.instance = mock;
+      final manager = XueHuaNaviteCacheManager.instance;
+      const CacheRequest shared = CacheRequest(
+        url: 'https://example.com/same.png',
+        customKey: 'same-key',
+      );
+      final List<CacheFetchResult> results =
+          await Future.wait<CacheFetchResult>(
+            List<CacheRequest>.generate(
+              8,
+              (_) => shared,
+            ).map(manager.downloadFile),
+          );
+      expect(mock.downloadCalls, 1);
+      expect(results.map((result) => result.entry.key).toSet(), <String>{
+        'same-key',
+      });
+
+      final CacheFetchResult again = await manager.downloadFile(shared);
+      expect(mock.downloadCalls, 2);
+      expect(again.source, CacheResultSource.cacheHit);
+
+      final List<CacheFetchResult>
+      distinct = await Future.wait<CacheFetchResult>(<Future<CacheFetchResult>>[
+        manager.downloadFile(
+          const CacheRequest(url: 'https://example.com/a.png', customKey: 'a'),
+        ),
+        manager.downloadFile(
+          const CacheRequest(url: 'https://example.com/b.png', customKey: 'b'),
+        ),
+        manager.downloadFile(
+          const CacheRequest(url: 'https://example.com/c.png', customKey: 'c'),
+        ),
+      ]);
+      expect(mock.downloadCalls, 5);
+      expect(distinct, hasLength(3));
     },
   );
 

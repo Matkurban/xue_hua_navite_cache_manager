@@ -1,5 +1,5 @@
 ---
-name: xue-hua-navite-cache-manager-usage
+name: xue-hua-navite-cache-manager
 description: Use when the user is working with xue_hua_navite_cache_manager APIs to display cached network images (CachedNetworkImage, CachedNetworkImageProvider), implement cross-platform network file caching, conditional HTTP 304 ETag/Last-Modified revalidation, 10,000+ entry LRU/LFU/FIFO/TTL disk eviction, MD5/SHA-256 checksum verification, tag-based cache invalidation, and real-time download progress tracking across Android, iOS, macOS, Windows, Linux, and Web.
 ---
 # xue-hua-navite-cache-manager

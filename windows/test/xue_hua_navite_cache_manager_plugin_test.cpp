@@ -22,21 +22,20 @@ using flutter::MethodResultFunctions;
 
 }  // namespace
 
-TEST(XueHuaNaviteCacheManagerPlugin, GetPlatformVersion) {
+TEST(XueHuaNaviteCacheManagerPlugin, GetCapabilitiesReturnsWindows) {
   XueHuaNaviteCacheManagerPlugin plugin;
-  // Save the reply value from the success callback.
-  std::string result_string;
+  EncodableMap result_map;
   plugin.HandleMethodCall(
-      MethodCall("getPlatformVersion", std::make_unique<EncodableValue>()),
+      MethodCall("getCapabilities", std::make_unique<EncodableValue>()),
       std::make_unique<MethodResultFunctions<>>(
-          [&result_string](const EncodableValue* result) {
-            result_string = std::get<std::string>(*result);
+          [&result_map](const EncodableValue* result) {
+            result_map = std::get<EncodableMap>(*result);
           },
           nullptr, nullptr));
 
-  // Since the exact string varies by host, just ensure that it's a string
-  // with the expected format.
-  EXPECT_TRUE(result_string.rfind("Windows ", 0) == 0);
+  auto it = result_map.find(EncodableValue("platformName"));
+  ASSERT_NE(it, result_map.end());
+  EXPECT_EQ(std::get<std::string>(it->second), "windows");
 }
 
 }  // namespace test

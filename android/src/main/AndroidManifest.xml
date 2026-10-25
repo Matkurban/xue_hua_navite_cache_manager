@@ -1,3 +1,4 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-  package="com.kurban.xue_hua_navite_cache_manager">
+    package="com.kurban.xue_hua_navite_cache_manager">
+    <uses-permission android:name="android.permission.INTERNET" />
 </manifest>

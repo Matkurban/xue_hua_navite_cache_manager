@@ -6,19 +6,19 @@ import PackageDescription
 let package = Package(
     name: "xue_hua_navite_cache_manager",
     platforms: [
-        .macOS("12.0")
+        .macOS("12.0"),
     ],
     products: [
-        .library(name: "xue-hua-navite-cache-manager", targets: ["xue_hua_navite_cache_manager"])
+        .library(name: "xue-hua-navite-cache-manager", targets: ["xue_hua_navite_cache_manager"]),
     ],
     dependencies: [
-        .package(name: "FlutterFramework", path: "../FlutterFramework")
+        .package(name: "FlutterFramework", path: "../FlutterFramework"),
     ],
     targets: [
         .target(
             name: "xue_hua_navite_cache_manager",
             dependencies: [
-                .product(name: "FlutterFramework", package: "FlutterFramework")
+                .product(name: "FlutterFramework", package: "FlutterFramework"),
             ],
             resources: [
                 // If your plugin requires a privacy manifest, for example if it collects user
@@ -31,6 +31,6 @@ let package = Package(
                 // the following instructions to add them:
                 // https://developer.apple.com/documentation/xcode/bundling-resources-with-a-swift-package
             ]
-        )
+        ),
     ]
 )

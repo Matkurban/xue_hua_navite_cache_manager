@@ -1,5 +1,5 @@
 group = "com.kurban.xue_hua_navite_cache_manager"
-version = "1.0-SNAPSHOT"
+version = "1.0.0"
 
 buildscript {
     val kotlinVersion = "2.4.0"

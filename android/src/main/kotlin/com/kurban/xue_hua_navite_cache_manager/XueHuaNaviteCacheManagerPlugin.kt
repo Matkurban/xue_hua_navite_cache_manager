@@ -15,10 +15,11 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
-import java.net.URL
+import java.net.URI
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
 
@@ -44,17 +45,41 @@ class XueHuaNaviteCacheManagerPlugin :
     private val executor = Executors.newCachedThreadPool()
 
     // Configuration fields
-    @Volatile private var maxDiskCacheBytes: Long = 500L * 1024L * 1024L
-    @Volatile private var maxEntries: Int = 2000
-    @Volatile private var defaultTtlSeconds: Long = 7L * 24L * 3600L
-    @Volatile private var evictionPolicy: String = "lru"
-    @Volatile private var cacheSubdirectory: String = "xue_hua_network_cache"
-    @Volatile private var maxConcurrentDownloads: Int = 4
-    @Volatile private var connectTimeoutMs: Int = 15000
-    @Volatile private var readTimeoutMs: Int = 30000
-    @Volatile private var defaultHeaders: Map<String, String> = emptyMap()
-    @Volatile private var respectHttpCacheHeaders: Boolean = true
-    @Volatile private var autoTrimOnWrite: Boolean = true
+    @Volatile
+    private var maxDiskCacheBytes: Long = 500L * 1024L * 1024L
+
+    @Volatile
+    private var maxEntries: Int = 2000
+
+    @Volatile
+    private var defaultTtlSeconds: Long = 7L * 24L * 3600L
+
+    @Volatile
+    private var evictionPolicy: String = "lru"
+
+    @Volatile
+    private var cacheSubdirectory: String = "xue_hua_network_cache"
+
+    @Volatile
+    private var maxConcurrentDownloads: Int = 4
+
+    @Volatile
+    private var downloadPermits = Semaphore(4)
+
+    @Volatile
+    private var connectTimeoutMs: Int = 15000
+
+    @Volatile
+    private var readTimeoutMs: Int = 30000
+
+    @Volatile
+    private var defaultHeaders: Map<String, String> = emptyMap()
+
+    @Volatile
+    private var respectHttpCacheHeaders: Boolean = true
+
+    @Volatile
+    private var autoTrimOnWrite: Boolean = true
 
     // Cache index and telemetry counters
     private val entries = LinkedHashMap<String, CacheRecord>()
@@ -84,7 +109,7 @@ class XueHuaNaviteCacheManagerPlugin :
         var pinned: Boolean
     ) {
         fun isExpired(nowMs: Long = System.currentTimeMillis()): Boolean {
-            return expiresAtMs > 0L && nowMs > expiresAtMs
+            return expiresAtMs in 1..<nowMs
         }
 
         fun toMap(): Map<String, Any?> {
@@ -141,7 +166,11 @@ class XueHuaNaviteCacheManagerPlugin :
                     tag = if (obj.has("tag") && !obj.isNull("tag")) obj.getString("tag") else null,
                     mimeType = if (obj.has("mimeType") && !obj.isNull("mimeType")) obj.getString("mimeType") else null,
                     eTag = if (obj.has("eTag") && !obj.isNull("eTag")) obj.getString("eTag") else null,
-                    lastModified = if (obj.has("lastModified") && !obj.isNull("lastModified")) obj.getString("lastModified") else null,
+                    lastModified = if (obj.has("lastModified") && !obj.isNull("lastModified")) {
+                        obj.getString("lastModified")
+                    } else {
+                        null
+                    },
                     checksum = if (obj.has("checksum") && !obj.isNull("checksum")) obj.getString("checksum") else null,
                     checksumAlgorithm = obj.optString("checksumAlgorithm", "none"),
                     pinned = obj.optBoolean("pinned", false)
@@ -152,10 +181,16 @@ class XueHuaNaviteCacheManagerPlugin :
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         applicationContext = flutterPluginBinding.applicationContext
-        methodChannel = MethodChannel(flutterPluginBinding.binaryMessenger, "xue_hua_navite_cache_manager")
+        methodChannel = MethodChannel(
+            flutterPluginBinding.binaryMessenger,
+            "xue_hua_navite_cache_manager"
+        )
         methodChannel.setMethodCallHandler(this)
 
-        eventChannel = EventChannel(flutterPluginBinding.binaryMessenger, "xue_hua_navite_cache_manager/events")
+        eventChannel = EventChannel(
+            flutterPluginBinding.binaryMessenger,
+            "xue_hua_navite_cache_manager/events"
+        )
         eventChannel.setStreamHandler(this)
     }
 
@@ -266,11 +301,11 @@ class XueHuaNaviteCacheManagerPlugin :
                 return keyOrUrl
             }
         }
-        return computeHashString(keyOrUrl.toByteArray(Charsets.UTF_8), "SHA-256")
+        return computeSha256String(keyOrUrl.toByteArray(Charsets.UTF_8))
     }
 
-    private fun computeHashString(bytes: ByteArray, algorithm: String): String {
-        val digest = MessageDigest.getInstance(algorithm)
+    private fun computeSha256String(bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256")
         val hash = digest.digest(bytes)
         return hash.joinToString("") { "%02x".format(it) }
     }
@@ -297,7 +332,7 @@ class XueHuaNaviteCacheManagerPlugin :
             return explicitExtension.trim().trimStart('.')
         }
         try {
-            val path = URL(url).path
+            val path = URI.create(url).path ?: ""
             val lastSegment = path.substringAfterLast('/', "")
             val ext = lastSegment.substringAfterLast('.', "")
             if (ext.isNotEmpty() && ext.length <= 8 && ext.all { it.isLetterOrDigit() }) {
@@ -352,11 +387,19 @@ class XueHuaNaviteCacheManagerPlugin :
         maxEntries = (args["maxEntries"] as? Number)?.toInt() ?: maxEntries
         defaultTtlSeconds = (args["defaultTtlSeconds"] as? Number)?.toLong() ?: defaultTtlSeconds
         evictionPolicy = (args["evictionPolicy"] as? String) ?: evictionPolicy
-        cacheSubdirectory = (args["cacheSubdirectory"] as? String)?.takeIf { it.isNotBlank() } ?: cacheSubdirectory
-        maxConcurrentDownloads = (args["maxConcurrentDownloads"] as? Number)?.toInt() ?: maxConcurrentDownloads
+        cacheSubdirectory =
+            (args["cacheSubdirectory"] as? String)?.takeIf { it.isNotBlank() } ?: cacheSubdirectory
+        val newConcurrency =
+            ((args["maxConcurrentDownloads"] as? Number)?.toInt() ?: maxConcurrentDownloads)
+                .coerceAtLeast(1)
+        if (newConcurrency != maxConcurrentDownloads) {
+            maxConcurrentDownloads = newConcurrency
+            downloadPermits = Semaphore(newConcurrency)
+        }
         connectTimeoutMs = (args["connectTimeoutMs"] as? Number)?.toInt() ?: connectTimeoutMs
         readTimeoutMs = (args["readTimeoutMs"] as? Number)?.toInt() ?: readTimeoutMs
-        respectHttpCacheHeaders = (args["respectHttpCacheHeaders"] as? Boolean) ?: respectHttpCacheHeaders
+        respectHttpCacheHeaders =
+            (args["respectHttpCacheHeaders"] as? Boolean) ?: respectHttpCacheHeaders
         autoTrimOnWrite = (args["autoTrimOnWrite"] as? Boolean) ?: autoTrimOnWrite
 
         val rawHeaders = args["defaultHeaders"] as? Map<*, *>
@@ -394,7 +437,13 @@ class XueHuaNaviteCacheManagerPlugin :
         } catch (e: CustomCacheException) {
             mainHandler.post { result.error(e.code, e.message, e.details) }
         } catch (e: Exception) {
-            mainHandler.post { result.error("DOWNLOAD_FAILED", e.message ?: "Download failed", null) }
+            mainHandler.post {
+                result.error(
+                    "DOWNLOAD_FAILED",
+                    e.message ?: "Download failed",
+                    null
+                )
+            }
         }
     }
 
@@ -406,7 +455,10 @@ class XueHuaNaviteCacheManagerPlugin :
 
     private fun executeDownloadRequest(args: Map<*, *>): Map<String, Any?> {
         val startMs = System.currentTimeMillis()
-        val url = (args["url"] as? String)?.trim() ?: throw CustomCacheException("INVALID_URL", "URL is required")
+        val url = (args["url"] as? String)?.trim() ?: throw CustomCacheException(
+            "INVALID_URL",
+            "URL is required"
+        )
         val customKey = args["customKey"] as? String
         val tag = args["tag"] as? String
         val fileExtension = args["fileExtension"] as? String
@@ -431,7 +483,14 @@ class XueHuaNaviteCacheManagerPlugin :
                     if (pinned) found.pinned = true
                     hitCount += 1L
                     persistIndexLocked()
-                    emitProgress(key, url, "cacheHit", found.sizeBytes, found.sizeBytes, found.filePath)
+                    emitProgress(
+                        key,
+                        url,
+                        "cacheHit",
+                        found.sizeBytes,
+                        found.sizeBytes,
+                        found.filePath
+                    )
                     return mapOf(
                         "entry" to found.toMap(),
                         "source" to "cacheHit",
@@ -447,9 +506,11 @@ class XueHuaNaviteCacheManagerPlugin :
         activeDownloads[key] = cancelFlag
         emitProgress(key, url, "started", 0L, -1L)
 
+        val semaphore = downloadPermits
+        semaphore.acquire()
         var tempFile: File? = null
         try {
-            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            val conn = (URI.create(url).toURL().openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = connectTimeoutMs
                 readTimeout = readTimeoutMs
@@ -483,19 +544,28 @@ class XueHuaNaviteCacheManagerPlugin :
 
             if (statusCode == HttpURLConnection.HTTP_NOT_MODIFIED && existing != null) {
                 val now = System.currentTimeMillis()
-                val ttlSec = ttlOverride ?: parseMaxAgeSeconds(conn.getHeaderField("Cache-Control")) ?: defaultTtlSeconds
+                val ttlSec = ttlOverride ?: parseMaxAgeSeconds(conn.getHeaderField("Cache-Control"))
+                    ?: defaultTtlSeconds
                 synchronized(indexLock) {
                     existing.lastAccessedAtMs = now
                     existing.expiresAtMs = now + ttlSec * 1000L
                     existing.hitCount += 1L
                     existing.eTag = conn.getHeaderField("ETag") ?: existing.eTag
-                    existing.lastModified = conn.getHeaderField("Last-Modified") ?: existing.lastModified
+                    existing.lastModified =
+                        conn.getHeaderField("Last-Modified") ?: existing.lastModified
                     if (tag != null) existing.tag = tag
                     if (pinned) existing.pinned = true
                     entries[key] = existing
                     persistIndexLocked()
                 }
-                emitProgress(key, url, "cacheHit", existing.sizeBytes, existing.sizeBytes, existing.filePath)
+                emitProgress(
+                    key,
+                    url,
+                    "cacheHit",
+                    existing.sizeBytes,
+                    existing.sizeBytes,
+                    existing.filePath
+                )
                 return mapOf(
                     "entry" to existing.toMap(),
                     "source" to "revalidated",
@@ -512,11 +582,12 @@ class XueHuaNaviteCacheManagerPlugin :
             val contentType = conn.contentType?.substringBefore(';')?.trim()
             val resolvedExt = inferExtension(url, contentType, fileExtension)
             val cacheDir = getCacheRootDir()
-            tempFile = File(cacheDir, "$key.${System.nanoTime()}.tmp")
+            val workingTempFile = File(cacheDir, "$key.${System.nanoTime()}.tmp")
+            tempFile = workingTempFile
 
             var bytesReceived = 0L
             conn.inputStream.use { input ->
-                FileOutputStream(tempFile!!).use { output ->
+                FileOutputStream(workingTempFile).use { output ->
                     val buffer = ByteArray(16 * 1024)
                     var read = input.read(buffer)
                     while (read != -1) {
@@ -534,9 +605,9 @@ class XueHuaNaviteCacheManagerPlugin :
 
             var computedHash: String? = null
             if (checksumAlgorithm != "none") {
-                computedHash = computeFileHash(tempFile!!, checksumAlgorithm)
+                computedHash = computeFileHash(workingTempFile, checksumAlgorithm)
                 if (!expectedChecksum.isNullOrEmpty() && computedHash.lowercase() != expectedChecksum) {
-                    tempFile?.delete()
+                    workingTempFile.delete()
                     throw CustomCacheException(
                         "CHECKSUM_MISMATCH",
                         "Checksum mismatch: expected $expectedChecksum, got $computedHash"
@@ -548,9 +619,9 @@ class XueHuaNaviteCacheManagerPlugin :
             if (finalFile.exists()) {
                 finalFile.delete()
             }
-            if (!tempFile!!.renameTo(finalFile)) {
-                tempFile!!.copyTo(finalFile, overwrite = true)
-                tempFile!!.delete()
+            if (!workingTempFile.renameTo(finalFile)) {
+                workingTempFile.copyTo(finalFile, overwrite = true)
+                workingTempFile.delete()
             }
 
             val now = System.currentTimeMillis()
@@ -608,10 +679,12 @@ class XueHuaNaviteCacheManagerPlugin :
                     "elapsedMs" to (System.currentTimeMillis() - startMs)
                 )
             }
-            val state = if (e is CustomCacheException && e.code == "CANCELED") "canceled" else "failed"
+            val state =
+                if (e is CustomCacheException && e.code == "CANCELED") "canceled" else "failed"
             emitProgress(key, url, state, 0L, -1L, null, e.message)
             throw e
         } finally {
+            semaphore.release()
             activeDownloads.remove(key)
         }
     }
@@ -629,12 +702,12 @@ class XueHuaNaviteCacheManagerPlugin :
     private fun handlePrefetchAll(call: MethodCall, result: Result) {
         val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
         val reqList = args["requests"] as? List<*> ?: emptyList<Any>()
-        val out = mutableListOf<Map<String, Any?>>()
+        val out = mutableListOf<Map<*, *>>()
         for (item in reqList) {
             val map = item as? Map<*, *> ?: continue
             try {
                 val res = executeDownloadRequest(map)
-                val entryMap = res["entry"] as? Map<String, Any?>
+                val entryMap = res["entry"] as? Map<*, *>
                 if (entryMap != null) {
                     out.add(entryMap)
                 }
@@ -697,7 +770,7 @@ class XueHuaNaviteCacheManagerPlugin :
         val ignoreExpired = (args["ignoreExpired"] as? Boolean) ?: true
         val key = resolveKey(keyOrUrl)
 
-        var filePath: String? = null
+        var resolvedFilePath: String? = null
         synchronized(indexLock) {
             val record = entries[key]
             if (record != null && (!ignoreExpired || !record.isExpired())) {
@@ -707,21 +780,22 @@ class XueHuaNaviteCacheManagerPlugin :
                     record.hitCount += 1L
                     hitCount += 1L
                     persistIndexLocked()
-                    filePath = record.filePath
+                    resolvedFilePath = record.filePath
                 }
             } else {
                 missCount += 1L
             }
         }
 
-        if (filePath == null) {
+        val targetPath = resolvedFilePath
+        if (targetPath == null) {
             mainHandler.post { result.success(null) }
             return
         }
         try {
-            val bytes = File(filePath!!).readBytes()
+            val bytes = File(targetPath).readBytes()
             mainHandler.post { result.success(bytes) }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             mainHandler.post { result.success(null) }
         }
     }
@@ -765,7 +839,7 @@ class XueHuaNaviteCacheManagerPlugin :
             val ext = inferExtension(url, mimeType, fileExtension)
             val destFile = File(getCacheRootDir(), "$key.$ext")
             destFile.writeBytes(bytes)
-            val checksum = computeHashString(bytes, "SHA-256")
+            val checksum = computeSha256String(bytes)
             val now = System.currentTimeMillis()
 
             val record = CacheRecord(
@@ -804,11 +878,18 @@ class XueHuaNaviteCacheManagerPlugin :
         val sourceFilePath = (args["sourceFilePath"] as? String)?.trim() ?: ""
         val sourceFile = File(sourceFilePath)
         if (key.isEmpty() || !sourceFile.exists()) {
-            mainHandler.post { result.error("INVALID_SOURCE", "Source file does not exist: $sourceFilePath", null) }
+            mainHandler.post {
+                result.error(
+                    "INVALID_SOURCE",
+                    "Source file does not exist: $sourceFilePath",
+                    null
+                )
+            }
             return
         }
         val url = (args["url"] as? String) ?: "file://$sourceFilePath"
-        val fileExtension = args["fileExtension"] as? String ?: sourceFile.extension.takeIf { it.isNotEmpty() }
+        val fileExtension =
+            args["fileExtension"] as? String ?: sourceFile.extension.takeIf { it.isNotEmpty() }
         val mimeType = (args["mimeType"] as? String) ?: "application/octet-stream"
         val tag = args["tag"] as? String
         val ttlSeconds = (args["ttlSeconds"] as? Number)?.toLong() ?: defaultTtlSeconds
@@ -963,11 +1044,11 @@ class XueHuaNaviteCacheManagerPlugin :
                 }
             }
 
-        for (candidate in candidates) {
+        for ((candidateKey) in candidates) {
             if (totalBytes <= targetMaxBytes && entries.size <= maxEntries) {
                 break
             }
-            val removed = entries.remove(candidate.key)
+            val removed = entries.remove(candidateKey)
             if (removed != null) {
                 File(removed.filePath).delete()
                 totalBytes -= removed.sizeBytes

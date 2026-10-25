@@ -17,10 +17,15 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.security.MessageDigest
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.Semaphore
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
@@ -31,6 +36,8 @@ import java.util.regex.Pattern
  * Provides thread-safe network file downloading, conditional HTTP revalidation (ETag / Last-Modified),
  * MD5 and SHA-256 verification, atomic disk persistence under `context.cacheDir`, O(1) running byte
  * tracking, debounced asynchronous index flushing for 10,000+ entries, and throttled progress events.
+ * Network downloads run on a fixed pool capped by `maxConcurrentDownloads`. Identical in-flight keys
+ * share one transfer and fan the result out to every waiter.
  */
 class XueHuaNaviteCacheManagerPlugin :
     FlutterPlugin,
@@ -45,6 +52,16 @@ class XueHuaNaviteCacheManagerPlugin :
     private var eventSink: EventChannel.EventSink? = null
     private val indexLock = Any()
     private val executor = Executors.newCachedThreadPool()
+    private val downloadExecutor = ThreadPoolExecutor(
+        4,
+        4,
+        30L,
+        TimeUnit.SECONDS,
+        LinkedBlockingQueue<Runnable>(),
+        ThreadFactory { runnable ->
+            Thread(runnable, "xue-hua-cache-download").apply { isDaemon = true }
+        },
+    )
     private val persistScheduler = Executors.newSingleThreadScheduledExecutor()
     private var pendingPersistFuture: ScheduledFuture<*>? = null
 
@@ -66,9 +83,6 @@ class XueHuaNaviteCacheManagerPlugin :
 
     @Volatile
     private var maxConcurrentDownloads: Int = 4
-
-    @Volatile
-    private var downloadPermits = Semaphore(4)
 
     @Volatile
     private var connectTimeoutMs: Int = 15000
@@ -93,8 +107,16 @@ class XueHuaNaviteCacheManagerPlugin :
     private var evictionCount: Long = 0L
     private var indexLoaded: Boolean = false
 
-    // Active download cancellation flags
+    // Active download cancellation flags, including downloads still queued for a pool slot.
     private val activeDownloads = ConcurrentHashMap<String, AtomicBoolean>()
+
+    private class InFlightDownload(
+        val future: CompletableFuture<Map<String, Any?>>,
+        val cancelFlag: AtomicBoolean = AtomicBoolean(false),
+    )
+
+    /** One network transfer per cache key. Followers await the leader's future. */
+    private val inFlightDownloads = ConcurrentHashMap<String, InFlightDownload>()
 
     private data class CacheRecord(
         val key: String,
@@ -201,6 +223,7 @@ class XueHuaNaviteCacheManagerPlugin :
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         flushIndexNow()
+        downloadExecutor.shutdownNow()
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
     }
@@ -487,8 +510,7 @@ class XueHuaNaviteCacheManagerPlugin :
             ((args["maxConcurrentDownloads"] as? Number)?.toInt() ?: maxConcurrentDownloads)
                 .coerceAtLeast(1)
         if (newConcurrency != maxConcurrentDownloads) {
-            maxConcurrentDownloads = newConcurrency
-            downloadPermits = Semaphore(newConcurrency)
+            resizeDownloadPool(newConcurrency)
         }
         connectTimeoutMs = (args["connectTimeoutMs"] as? Number)?.toInt() ?: connectTimeoutMs
         readTimeoutMs = (args["readTimeoutMs"] as? Number)?.toInt() ?: readTimeoutMs
@@ -524,21 +546,149 @@ class XueHuaNaviteCacheManagerPlugin :
         result.success(null)
     }
 
+    private fun resizeDownloadPool(newConcurrency: Int) {
+        val size = newConcurrency.coerceAtLeast(1)
+        maxConcurrentDownloads = size
+        if (size > downloadExecutor.maximumPoolSize) {
+            downloadExecutor.maximumPoolSize = size
+            downloadExecutor.corePoolSize = size
+        } else {
+            downloadExecutor.corePoolSize = size
+            downloadExecutor.maximumPoolSize = size
+        }
+    }
+
+    private fun deliverDownloadResult(result: Result, value: Map<String, Any?>?, error: Throwable?) {
+        val failure = unwrapDownloadError(error)
+        mainHandler.post {
+            when (failure) {
+                null -> result.success(value)
+                is CustomCacheException -> result.error(failure.code, failure.message, failure.details)
+                else -> result.error("DOWNLOAD_FAILED", failure.message ?: "Download failed", null)
+            }
+        }
+    }
+
+    private fun unwrapDownloadError(error: Throwable?): Throwable? {
+        var current = error
+        while (current is CompletionException && current.cause != null) {
+            current = current.cause
+        }
+        return current
+    }
+
+    /**
+     * Cache hits return immediately. Misses share one pooled download per key and complete
+     * every waiter from that single transfer.
+     */
+    private fun downloadCoalesced(args: Map<*, *>): CompletableFuture<Map<String, Any?>> {
+        val url = (args["url"] as? String)?.trim()
+        if (url.isNullOrEmpty()) {
+            val failed = CompletableFuture<Map<String, Any?>>()
+            failed.completeExceptionally(CustomCacheException("INVALID_URL", "URL is required"))
+            return failed
+        }
+        val customKey = args["customKey"] as? String
+        val forceRefresh = (args["forceRefresh"] as? Boolean) ?: false
+        val key = resolveKey(url, customKey)
+        if (!forceRefresh) {
+            val cached = tryFreshCacheHit(args, key, url, System.currentTimeMillis())
+            if (cached != null) {
+                return CompletableFuture.completedFuture(cached)
+            }
+        }
+
+        val created = InFlightDownload(CompletableFuture())
+        val existing = inFlightDownloads.putIfAbsent(key, created)
+        if (existing != null) {
+            return existing.future
+        }
+        activeDownloads[key] = created.cancelFlag
+        try {
+            downloadExecutor.execute {
+                var value: Map<String, Any?>? = null
+                var error: Exception? = null
+                try {
+                    if (created.cancelFlag.get()) {
+                        throw CustomCacheException("CANCELED", "Download canceled for $key")
+                    }
+                    value = executeDownloadRequest(args, created.cancelFlag)
+                } catch (e: Exception) {
+                    error = e
+                } finally {
+                    inFlightDownloads.remove(key, created)
+                    activeDownloads.remove(key, created.cancelFlag)
+                }
+                if (error != null) {
+                    created.future.completeExceptionally(error)
+                } else if (value != null) {
+                    created.future.complete(value)
+                } else {
+                    created.future.completeExceptionally(
+                        CustomCacheException("DOWNLOAD_FAILED", "Download failed"),
+                    )
+                }
+            }
+        } catch (e: RejectedExecutionException) {
+            inFlightDownloads.remove(key, created)
+            activeDownloads.remove(key, created.cancelFlag)
+            created.future.completeExceptionally(e)
+        }
+        return created.future
+    }
+
+    private fun tryFreshCacheHit(
+        args: Map<*, *>,
+        key: String,
+        url: String,
+        startMs: Long,
+    ): Map<String, Any?>? {
+        val tag = args["tag"] as? String
+        val pinned = (args["pinned"] as? Boolean) ?: false
+        val hit = synchronized(indexLock) {
+            val found = entries[key] ?: return@synchronized null
+            if (!File(found.filePath).exists() || found.isExpired(startMs)) {
+                return@synchronized null
+            }
+            found.lastAccessedAtMs = startMs
+            found.hitCount += 1L
+            if (tag != null) found.tag = tag
+            if (pinned) found.pinned = true
+            hitCount += 1L
+            schedulePersistIndexLocked()
+            mapOf(
+                "entry" to found.toMap(),
+                "source" to "cacheHit",
+                "httpStatusCode" to null,
+                "elapsedMs" to (System.currentTimeMillis() - startMs),
+                "size" to found.sizeBytes,
+                "path" to found.filePath,
+            )
+        } ?: return null
+        emitProgress(
+            key,
+            url,
+            "cacheHit",
+            hit["size"] as Long,
+            hit["size"] as Long,
+            hit["path"] as String,
+        )
+        return mapOf(
+            "entry" to hit["entry"],
+            "source" to hit["source"],
+            "httpStatusCode" to hit["httpStatusCode"],
+            "elapsedMs" to hit["elapsedMs"],
+        )
+    }
+
     private fun handleDownloadFile(call: MethodCall, result: Result) {
         val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
         try {
-            val fetchResult = executeDownloadRequest(args)
-            mainHandler.post { result.success(fetchResult) }
-        } catch (e: CustomCacheException) {
-            mainHandler.post { result.error(e.code, e.message, e.details) }
-        } catch (e: Exception) {
-            mainHandler.post {
-                result.error(
-                    "DOWNLOAD_FAILED",
-                    e.message ?: "Download failed",
-                    null
-                )
+            downloadCoalesced(args).whenComplete { value, error ->
+                deliverDownloadResult(result, value, error)
             }
+        } catch (e: Exception) {
+            deliverDownloadResult(result, null, e)
         }
     }
 
@@ -548,7 +698,10 @@ class XueHuaNaviteCacheManagerPlugin :
         val details: Any? = null
     ) : Exception(message)
 
-    private fun executeDownloadRequest(args: Map<*, *>): Map<String, Any?> {
+    private fun executeDownloadRequest(
+        args: Map<*, *>,
+        externalCancel: AtomicBoolean? = null,
+    ): Map<String, Any?> {
         val startMs = System.currentTimeMillis()
         val url = (args["url"] as? String)?.trim() ?: throw CustomCacheException(
             "INVALID_URL",
@@ -597,12 +750,19 @@ class XueHuaNaviteCacheManagerPlugin :
             missCount += 1L
         }
 
-        val cancelFlag = AtomicBoolean(false)
-        activeDownloads[key] = cancelFlag
+        val cancelFlag = externalCancel ?: AtomicBoolean(false)
+        val ownsCancel = externalCancel == null
+        if (ownsCancel) {
+            activeDownloads[key] = cancelFlag
+        }
         emitProgress(key, url, "started", 0L, -1L)
+        if (cancelFlag.get()) {
+            if (ownsCancel) {
+                activeDownloads.remove(key, cancelFlag)
+            }
+            throw CustomCacheException("CANCELED", "Download canceled for $key")
+        }
 
-        val semaphore = downloadPermits
-        semaphore.acquire()
         var tempFile: File? = null
         try {
             val conn = (URI.create(url).toURL().openConnection() as HttpURLConnection).apply {
@@ -788,8 +948,9 @@ class XueHuaNaviteCacheManagerPlugin :
             emitProgress(key, url, state, 0L, -1L, null, e.message)
             throw e
         } finally {
-            semaphore.release()
-            activeDownloads.remove(key)
+            if (ownsCancel) {
+                activeDownloads.remove(key, cancelFlag)
+            }
         }
     }
 
@@ -806,19 +967,29 @@ class XueHuaNaviteCacheManagerPlugin :
     private fun handlePrefetchAll(call: MethodCall, result: Result) {
         val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
         val reqList = args["requests"] as? List<*> ?: emptyList<Any>()
-        val out = mutableListOf<Map<*, *>>()
+        val futures = mutableListOf<CompletableFuture<Map<String, Any?>>>()
         for (item in reqList) {
             val map = item as? Map<*, *> ?: continue
-            try {
-                val res = executeDownloadRequest(map)
-                val entryMap = res["entry"] as? Map<*, *>
-                if (entryMap != null) {
-                    out.add(entryMap)
-                }
-            } catch (_: Exception) {
-            }
+            futures.add(downloadCoalesced(map))
         }
-        mainHandler.post { result.success(out) }
+        if (futures.isEmpty()) {
+            mainHandler.post { result.success(emptyList<Any>()) }
+            return
+        }
+        CompletableFuture.allOf(*futures.toTypedArray()).whenComplete { _, _ ->
+            val out = mutableListOf<Map<*, *>>()
+            for (future in futures) {
+                try {
+                    val res = future.getNow(null) ?: continue
+                    val entryMap = res["entry"] as? Map<*, *>
+                    if (entryMap != null) {
+                        out.add(entryMap)
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            mainHandler.post { result.success(out) }
+        }
     }
 
     private fun handleCancelDownload(call: MethodCall, result: Result) {

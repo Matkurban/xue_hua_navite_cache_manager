@@ -9,11 +9,15 @@
 #include <flutter/standard_method_codec.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace xue_hua_navite_cache_manager {
@@ -77,10 +81,42 @@ class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin {
                     const std::string& file_path = "",
                     const std::string& error_message = "");
 
-  bool ExecuteDownloadLockedOrUnlocked(const flutter::EncodableMap& args,
-                                       flutter::EncodableMap* out_result,
-                                       std::string* out_error_code,
-                                       std::string* out_error_msg);
+  struct DownloadOutcome {
+    bool ok = false;
+    flutter::EncodableMap result;
+    std::string error_code;
+    std::string error_msg;
+  };
+
+  struct InFlightDownload {
+    std::shared_ptr<std::atomic<bool>> cancel_flag;
+    std::vector<std::function<void(const DownloadOutcome&)>> waiters;
+  };
+
+  bool ExecuteDownloadLockedOrUnlocked(
+      const flutter::EncodableMap& args,
+      flutter::EncodableMap* out_result,
+      std::string* out_error_code,
+      std::string* out_error_msg,
+      const std::shared_ptr<std::atomic<bool>>& external_cancel);
+
+  // Assumes mutex_ is held. Fresh cache hits do not occupy a download slot.
+  bool TryServeFreshCacheLocked(const std::string& key,
+                                const std::string& url,
+                                const std::string& tag,
+                                bool pinned,
+                                int64_t start_ms,
+                                flutter::EncodableMap* out_result);
+
+  void ScheduleDownload(
+      const flutter::EncodableMap& args,
+      const std::function<void(const DownloadOutcome&)>& callback);
+  void FinishInFlight(const std::string& key,
+                      const std::shared_ptr<InFlightDownload>& state,
+                      const DownloadOutcome& outcome);
+  void EnsureDownloadWorkers(int workers);
+  void DownloadWorkerLoop();
+  void PostDownloadJob(std::function<void()> job);
 
   mutable std::mutex mutex_;
   mutable std::mutex sink_mutex_;
@@ -105,6 +141,16 @@ class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin {
   int64_t eviction_count_ = 0;
   bool index_loaded_ = false;
   std::map<std::string, std::shared_ptr<std::atomic<bool>>> active_cancels_;
+  std::map<std::string, std::shared_ptr<InFlightDownload>> in_flight_;
+
+  // Bounded pool. Idle threads may stay at the high-water mark, but only
+  // max_concurrent_downloads_ jobs run at once.
+  std::mutex pool_mutex_;
+  std::condition_variable pool_cv_;
+  std::queue<std::function<void()>> download_jobs_;
+  std::vector<std::thread> download_workers_;
+  bool pool_stopping_ = false;
+  int active_download_slots_ = 0;
 };
 
 }  // namespace xue_hua_navite_cache_manager

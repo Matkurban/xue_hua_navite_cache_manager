@@ -1,6 +1,7 @@
 #include "xue_hua_navite_cache_manager_plugin.h"
 
 #include <windows.h>
+#include <objbase.h>
 #include <winhttp.h>
 #include <bcrypt.h>
 #include <shlobj.h>
@@ -247,9 +248,22 @@ void XueHuaNaviteCacheManagerPlugin::RegisterWithRegistrar(
   registrar->AddPlugin(std::move(plugin));
 }
 
-XueHuaNaviteCacheManagerPlugin::XueHuaNaviteCacheManagerPlugin() {}
+XueHuaNaviteCacheManagerPlugin::XueHuaNaviteCacheManagerPlugin() {
+  EnsureDownloadWorkers(max_concurrent_downloads_);
+}
 
-XueHuaNaviteCacheManagerPlugin::~XueHuaNaviteCacheManagerPlugin() {}
+XueHuaNaviteCacheManagerPlugin::~XueHuaNaviteCacheManagerPlugin() {
+  {
+    std::lock_guard<std::mutex> lock(pool_mutex_);
+    pool_stopping_ = true;
+  }
+  pool_cv_.notify_all();
+  for (auto& worker : download_workers_) {
+    if (worker.joinable()) {
+      worker.join();
+    }
+  }
+}
 
 void XueHuaNaviteCacheManagerPlugin::SetEventSink(
     std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> sink) {
@@ -451,7 +465,8 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
     const flutter::EncodableMap& args,
     flutter::EncodableMap* out_result,
     std::string* out_error_code,
-    std::string* out_error_msg) {
+    std::string* out_error_msg,
+    const std::shared_ptr<std::atomic<bool>>& external_cancel) {
   int64_t start_ms = CurrentTimeMs();
   std::string url = GetStringArg(args, "url");
   if (url.empty()) {
@@ -504,10 +519,30 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
     miss_count_++;
   }
 
-  auto cancel_flag = std::make_shared<std::atomic<bool>>(false);
-  {
+  std::shared_ptr<std::atomic<bool>> cancel_flag =
+      external_cancel ? external_cancel
+                      : std::make_shared<std::atomic<bool>>(false);
+  const bool owns_cancel = static_cast<bool>(!external_cancel);
+  struct CancelGuard {
+    XueHuaNaviteCacheManagerPlugin* plugin;
+    std::string guarded_key;
+    bool own = false;
+    ~CancelGuard() {
+      if (!own || plugin == nullptr) return;
+      std::lock_guard<std::mutex> lock(plugin->mutex_);
+      plugin->active_cancels_.erase(guarded_key);
+    }
+  } cancel_guard{this, key, false};
+  if (owns_cancel) {
     std::lock_guard<std::mutex> lock(mutex_);
     active_cancels_[key] = cancel_flag;
+    cancel_guard.own = true;
+  }
+  if (cancel_flag->load()) {
+    *out_error_code = "CANCELED";
+    *out_error_msg = "Download canceled";
+    EmitProgress(key, url, "canceled", 0, -1, "", "Download canceled");
+    return false;
   }
   EmitProgress(key, url, "started", 0, -1);
 
@@ -524,7 +559,6 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
   if (!WinHttpCrackUrl(wurl.c_str(), static_cast<DWORD>(wurl.size()), 0,
                        &urlComp)) {
     std::lock_guard<std::mutex> lock(mutex_);
-    active_cancels_.erase(key);
     *out_error_code = "INVALID_URL";
     *out_error_msg = "WinHttpCrackUrl failed";
     return false;
@@ -536,7 +570,6 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
                                    WINHTTP_NO_PROXY_BYPASS, 0);
   if (!hSession) {
     std::lock_guard<std::mutex> lock(mutex_);
-    active_cancels_.erase(key);
     *out_error_code = "NETWORK_ERROR";
     *out_error_msg = "WinHttpOpen failed";
     return false;
@@ -550,7 +583,6 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
   if (!hConnect) {
     WinHttpCloseHandle(hSession);
     std::lock_guard<std::mutex> lock(mutex_);
-    active_cancels_.erase(key);
     *out_error_code = "NETWORK_ERROR";
     *out_error_msg = "WinHttpConnect failed";
     return false;
@@ -565,7 +597,6 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
     std::lock_guard<std::mutex> lock(mutex_);
-    active_cancels_.erase(key);
     *out_error_code = "NETWORK_ERROR";
     *out_error_msg = "WinHttpOpenRequest failed";
     return false;
@@ -598,7 +629,6 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
     std::lock_guard<std::mutex> lock(mutex_);
-    active_cancels_.erase(key);
     if (fallback_on_error && has_existing) {
       (*out_result)[flutter::EncodableValue("entry")] =
           flutter::EncodableValue(existing_record.ToEncodableMap());
@@ -628,7 +658,6 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
     WinHttpCloseHandle(hSession);
     int64_t now = CurrentTimeMs();
     std::lock_guard<std::mutex> lock(mutex_);
-    active_cancels_.erase(key);
     existing_record.last_accessed_at_ms = now;
     existing_record.expires_at_ms =
         now + (has_ttl ? ttl_override : default_ttl_seconds_) * 1000LL;
@@ -654,7 +683,6 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
     std::lock_guard<std::mutex> lock(mutex_);
-    active_cancels_.erase(key);
     if (fallback_on_error && has_existing) {
       (*out_result)[flutter::EncodableValue("entry")] =
           flutter::EncodableValue(existing_record.ToEncodableMap());
@@ -690,7 +718,6 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
       WinHttpCloseHandle(hConnect);
       WinHttpCloseHandle(hSession);
       std::lock_guard<std::mutex> lock(mutex_);
-      active_cancels_.erase(key);
       EmitProgress(key, url, "canceled", 0, -1, "", "Download canceled");
       *out_error_code = "CANCELED";
       *out_error_msg = "Download canceled";
@@ -714,7 +741,6 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    active_cancels_.erase(key);
   }
 
   std::string computed_hash;
@@ -781,6 +807,199 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
   return true;
 }
 
+bool XueHuaNaviteCacheManagerPlugin::TryServeFreshCacheLocked(
+    const std::string& key,
+    const std::string& url,
+    const std::string& tag,
+    bool pinned,
+    int64_t start_ms,
+    flutter::EncodableMap* out_result) {
+  auto it = entries_.find(key);
+  std::error_code ec;
+  if (it == entries_.end() ||
+      !fs::exists(fs::u8path(it->second.file_path), ec) ||
+      it->second.IsExpired(start_ms)) {
+    return false;
+  }
+  it->second.last_accessed_at_ms = start_ms;
+  it->second.hit_count += 1;
+  if (!tag.empty()) it->second.tag = tag;
+  if (pinned) it->second.pinned = true;
+  hit_count_++;
+  PersistIndexLocked();
+  EmitProgress(key, url, "cacheHit", it->second.size_bytes, it->second.size_bytes,
+               it->second.file_path);
+  (*out_result)[flutter::EncodableValue("entry")] =
+      flutter::EncodableValue(it->second.ToEncodableMap());
+  (*out_result)[flutter::EncodableValue("source")] =
+      flutter::EncodableValue("cacheHit");
+  (*out_result)[flutter::EncodableValue("httpStatusCode")] =
+      flutter::EncodableValue();
+  (*out_result)[flutter::EncodableValue("elapsedMs")] =
+      flutter::EncodableValue(CurrentTimeMs() - start_ms);
+  return true;
+}
+
+void XueHuaNaviteCacheManagerPlugin::FinishInFlight(
+    const std::string& key,
+    const std::shared_ptr<InFlightDownload>& state,
+    const DownloadOutcome& outcome) {
+  std::vector<std::function<void(const DownloadOutcome&)>> waiters;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = in_flight_.find(key);
+    if (it != in_flight_.end() && it->second == state) {
+      waiters.swap(it->second->waiters);
+      in_flight_.erase(it);
+    } else if (state) {
+      waiters.swap(state->waiters);
+    }
+    auto cancel = active_cancels_.find(key);
+    if (cancel != active_cancels_.end() && state &&
+        cancel->second == state->cancel_flag) {
+      active_cancels_.erase(cancel);
+    }
+  }
+  for (const auto& waiter : waiters) {
+    waiter(outcome);
+  }
+}
+
+void XueHuaNaviteCacheManagerPlugin::EnsureDownloadWorkers(int workers) {
+  if (workers < 1) workers = 1;
+  std::lock_guard<std::mutex> lock(pool_mutex_);
+  max_concurrent_downloads_ = workers;
+  while (static_cast<int>(download_workers_.size()) < workers) {
+    download_workers_.emplace_back([this]() { DownloadWorkerLoop(); });
+  }
+  pool_cv_.notify_all();
+}
+
+void XueHuaNaviteCacheManagerPlugin::DownloadWorkerLoop() {
+  const HRESULT com_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  const bool com_ready = SUCCEEDED(com_hr);
+  for (;;) {
+    std::function<void()> job;
+    {
+      std::unique_lock<std::mutex> lock(pool_mutex_);
+      pool_cv_.wait(lock, [this]() {
+        return (pool_stopping_ && download_jobs_.empty()) ||
+               (!download_jobs_.empty() &&
+                active_download_slots_ < max_concurrent_downloads_);
+      });
+      if (download_jobs_.empty()) {
+        break;
+      }
+      job = std::move(download_jobs_.front());
+      download_jobs_.pop();
+      active_download_slots_ += 1;
+    }
+    try {
+      job();
+    } catch (...) {
+    }
+    {
+      std::lock_guard<std::mutex> lock(pool_mutex_);
+      active_download_slots_ -= 1;
+    }
+    pool_cv_.notify_all();
+  }
+  if (com_ready) {
+    CoUninitialize();
+  }
+}
+
+void XueHuaNaviteCacheManagerPlugin::PostDownloadJob(std::function<void()> job) {
+  {
+    std::lock_guard<std::mutex> lock(pool_mutex_);
+    if (pool_stopping_) return;
+    download_jobs_.push(std::move(job));
+  }
+  pool_cv_.notify_one();
+}
+
+void XueHuaNaviteCacheManagerPlugin::ScheduleDownload(
+    const flutter::EncodableMap& args,
+    const std::function<void(const DownloadOutcome&)>& callback) {
+  const int64_t start_ms = CurrentTimeMs();
+  const std::string url = GetStringArg(args, "url");
+  if (url.empty()) {
+    DownloadOutcome outcome;
+    outcome.ok = false;
+    outcome.error_code = "INVALID_URL";
+    outcome.error_msg = "URL is required";
+    callback(outcome);
+    return;
+  }
+  const std::string custom_key = GetStringArg(args, "customKey");
+  const std::string tag = GetStringArg(args, "tag");
+  const bool force_refresh = GetBoolArg(args, "forceRefresh", false);
+  const bool pinned = GetBoolArg(args, "pinned", false);
+  const std::string key = ResolveKey(url, custom_key);
+
+  DownloadOutcome early;
+  bool has_early = false;
+  std::shared_ptr<InFlightDownload> state;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!force_refresh) {
+      flutter::EncodableMap cached;
+      if (TryServeFreshCacheLocked(key, url, tag, pinned, start_ms, &cached)) {
+        early.ok = true;
+        early.result = std::move(cached);
+        has_early = true;
+      }
+    }
+    if (!has_early) {
+      auto existing = in_flight_.find(key);
+      if (existing != in_flight_.end()) {
+        existing->second->waiters.push_back(callback);
+        return;
+      }
+      state = std::make_shared<InFlightDownload>();
+      state->cancel_flag = std::make_shared<std::atomic<bool>>(false);
+      state->waiters.push_back(callback);
+      in_flight_[key] = state;
+      active_cancels_[key] = state->cancel_flag;
+    }
+  }
+  if (has_early) {
+    callback(early);
+    return;
+  }
+
+  PostDownloadJob([this, args, key, state]() {
+    DownloadOutcome outcome;
+    try {
+      if (state->cancel_flag->load()) {
+        outcome.ok = false;
+        outcome.error_code = "CANCELED";
+        outcome.error_msg = "Download canceled";
+        EmitProgress(key, GetStringArg(args, "url"), "canceled", 0, -1, "",
+                     "Download canceled");
+      } else {
+        std::string err_code;
+        std::string err_msg;
+        flutter::EncodableMap out;
+        outcome.ok = ExecuteDownloadLockedOrUnlocked(
+            args, &out, &err_code, &err_msg, state->cancel_flag);
+        outcome.result = std::move(out);
+        outcome.error_code = std::move(err_code);
+        outcome.error_msg = std::move(err_msg);
+      }
+    } catch (const std::exception& ex) {
+      outcome.ok = false;
+      outcome.error_code = "DOWNLOAD_FAILED";
+      outcome.error_msg = ex.what();
+    } catch (...) {
+      outcome.ok = false;
+      outcome.error_code = "DOWNLOAD_FAILED";
+      outcome.error_msg = "Download failed";
+    }
+    FinishInFlight(key, state, outcome);
+  });
+}
+
 void XueHuaNaviteCacheManagerPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue> &method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
@@ -811,34 +1030,79 @@ void XueHuaNaviteCacheManagerPlugin::HandleMethodCall(
       EnforceQuotaLocked(max_disk_cache_bytes_, "");
       PersistIndexLocked();
     }
+    if (HasArg(args, "maxConcurrentDownloads")) {
+      int conc = static_cast<int>(GetInt64Arg(args, "maxConcurrentDownloads", 4));
+      if (conc < 1) conc = 1;
+      EnsureDownloadWorkers(conc);
+    }
     result->Success();
   } else if (method == "downloadFile") {
-    flutter::EncodableMap out_map;
-    std::string err_code, err_msg;
-    if (ExecuteDownloadLockedOrUnlocked(args, &out_map, &err_code, &err_msg)) {
-      result->Success(flutter::EncodableValue(out_map));
-    } else {
-      result->Error(err_code, err_msg);
-    }
+    auto shared_result =
+        std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>>(
+            std::move(result));
+    ScheduleDownload(args, [shared_result](const DownloadOutcome& outcome) {
+      if (outcome.ok) {
+        shared_result->Success(flutter::EncodableValue(outcome.result));
+      } else {
+        shared_result->Error(outcome.error_code, outcome.error_msg);
+      }
+    });
   } else if (method == "prefetchAll") {
-    flutter::EncodableList list_out;
+    auto shared_result =
+        std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>>(
+            std::move(result));
+    std::vector<flutter::EncodableMap> requests;
     auto it = args.find(flutter::EncodableValue("requests"));
     if (it != args.end() &&
         std::holds_alternative<flutter::EncodableList>(it->second)) {
       const auto& reqs = std::get<flutter::EncodableList>(it->second);
       for (const auto& item : reqs) {
         if (std::holds_alternative<flutter::EncodableMap>(item)) {
-          flutter::EncodableMap out_map;
-          std::string err_code, err_msg;
-          if (ExecuteDownloadLockedOrUnlocked(
-                  std::get<flutter::EncodableMap>(item), &out_map, &err_code,
-                  &err_msg)) {
-            list_out.push_back(out_map[flutter::EncodableValue("entry")]);
-          }
+          requests.push_back(std::get<flutter::EncodableMap>(item));
         }
       }
     }
-    result->Success(flutter::EncodableValue(list_out));
+    if (requests.empty()) {
+      shared_result->Success(flutter::EncodableValue(flutter::EncodableList()));
+    } else {
+      struct PrefetchState {
+        std::mutex mu;
+        int remaining = 0;
+        std::vector<std::pair<bool, flutter::EncodableValue>> slots;
+      };
+      auto prefetch_state = std::make_shared<PrefetchState>();
+      prefetch_state->remaining = static_cast<int>(requests.size());
+      prefetch_state->slots.resize(requests.size());
+      for (size_t index = 0; index < requests.size(); ++index) {
+        ScheduleDownload(
+            requests[index],
+            [shared_result, prefetch_state, index](const DownloadOutcome& outcome) {
+              flutter::EncodableList list_out;
+              bool done = false;
+              {
+                std::lock_guard<std::mutex> lock(prefetch_state->mu);
+                if (outcome.ok) {
+                  auto entry = outcome.result.find(flutter::EncodableValue("entry"));
+                  if (entry != outcome.result.end()) {
+                    prefetch_state->slots[index] = std::make_pair(true, entry->second);
+                  }
+                }
+                prefetch_state->remaining -= 1;
+                if (prefetch_state->remaining == 0) {
+                  done = true;
+                  for (const auto& slot : prefetch_state->slots) {
+                    if (slot.first) {
+                      list_out.push_back(slot.second);
+                    }
+                  }
+                }
+              }
+              if (done) {
+                shared_result->Success(flutter::EncodableValue(list_out));
+              }
+            });
+      }
+    }
   } else if (method == "cancelDownload") {
     std::string key_or_url = GetStringArg(args, "keyOrUrl");
     std::string key = ResolveKey(key_or_url);

@@ -25,8 +25,8 @@
 
 | 平台 / 环境 | 最低版本要求 | 底层核心技术栈 |
 | :--- | :--- | :--- |
-| **Dart SDK** | `>=3.4.0 <4.0.0` | `plugin_platform_interface`, `web: ^1.0.0` |
-| **Flutter** | `>=3.22.0` | `MethodChannel`, `EventChannel`, `flutter_web_plugins` |
+| **Dart SDK** | `^3.13.0` | `plugin_platform_interface`, `web: ^1.0.0` |
+| **Flutter** | `>=3.47.0` | `MethodChannel`, `EventChannel`, `flutter_web_plugins` |
 | **Android** | API 24+ (Android 7.0+) | `HttpURLConnection`, `MessageDigest`, `Context.cacheDir` |
 | **iOS** | iOS 15.0+ | `URLSession`, `CryptoKit`, `FileManager (.cachesDirectory)` |
 | **macOS** | macOS 12.0+ | `URLSession`, `CryptoKit`, `FileManager (.cachesDirectory)` |

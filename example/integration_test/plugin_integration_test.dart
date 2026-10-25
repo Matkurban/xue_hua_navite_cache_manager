@@ -98,13 +98,13 @@ void main() {
           final ifNoneMatch = req.headers.value(HttpHeaders.ifNoneMatchHeader);
           if (ifNoneMatch == '"v1-etag"') {
             req.response.statusCode = HttpStatus.notModified;
-            req.response.headers.set(HttpHeaders.eTagHeader, '"v1-etag"');
+            req.response.headers.set(HttpHeaders.etagHeader, '"v1-etag"');
             await req.response.close();
             return;
           }
           req.response.statusCode = HttpStatus.ok;
           req.response.headers.contentType = ContentType.text;
-          req.response.headers.set(HttpHeaders.eTagHeader, '"v1-etag"');
+          req.response.headers.set(HttpHeaders.etagHeader, '"v1-etag"');
           req.response.add(serverBody);
           await req.response.close();
         });

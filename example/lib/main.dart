@@ -56,7 +56,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   CacheEvictionPolicy _evictionPolicy = CacheEvictionPolicy.lru;
   CacheChecksumAlgorithm _checksumAlgorithm = CacheChecksumAlgorithm.sha256;
   int _maxQuotaMb = 100;
-  int _defaultTtlSeconds = 3600;
+  final int _defaultTtlSeconds = 3600;
   bool _forceRefresh = false;
   bool _fallbackOnError = true;
   bool _pinNewEntry = false;
@@ -77,17 +77,20 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   static const List<Map<String, String>> _sampleUrls = <Map<String, String>>[
     <String, String>{
       'label': 'Owl Image (JPG)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+      'url':
+          'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
       'tag': 'images',
     },
     <String, String>{
       'label': 'Falcon Image (JPG)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
+      'url':
+          'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
       'tag': 'images',
     },
     <String, String>{
       'label': 'Butterfly Video (MP4)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
+      'url':
+          'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
       'tag': 'videos',
     },
   ];

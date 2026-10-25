@@ -38,8 +38,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   final XueHuaNaviteCacheManager _cache = XueHuaNaviteCacheManager.instance;
 
   final TextEditingController _urlController = TextEditingController(
-    text:
-        'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+    text: 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
   );
   final TextEditingController _customKeyController = TextEditingController();
   final TextEditingController _tagController = TextEditingController(
@@ -55,11 +54,13 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
 
   CacheEvictionPolicy _evictionPolicy = CacheEvictionPolicy.lru;
   CacheChecksumAlgorithm _checksumAlgorithm = CacheChecksumAlgorithm.sha256;
-  int _maxQuotaMb = 100;
-  final int _defaultTtlSeconds = 3600;
+  int _maxQuotaMb = 250;
+  final int _defaultTtlSeconds = 7 * 24 * 3600;
   bool _forceRefresh = false;
   bool _fallbackOnError = true;
   bool _pinNewEntry = false;
+  bool _simulateBrokenCard = false;
+  bool _isReady = false;
 
   CachePlatformCapabilities? _capabilities;
   CacheStats? _stats;
@@ -69,7 +70,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   CacheFetchResult? _lastFetchResult;
   Uint8List? _previewBytes;
   String _statusLog =
-      'Ready. Configure, download network files, or test CachedNetworkImage.';
+      'Ready. Configure, download network files, or test CachedNetworkImage (104 public images).';
   String _benchmarkReport =
       'Click "Run 10,000+ Entries Stress Benchmark" to test high-volume index throughput.';
   bool _isBusy = false;
@@ -79,25 +80,60 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   static const List<Map<String, String>> _sampleUrls = <Map<String, String>>[
     <String, String>{
       'label': 'Owl Image (JPG)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+      'url':
+          'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
       'tag': 'images',
     },
     <String, String>{
       'label': 'Falcon Image (JPG)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
+      'url':
+          'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
       'tag': 'images',
     },
     <String, String>{
       'label': 'Puffin Image (JPG)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/puffin.jpg',
+      'url':
+          'https://flutter.github.io/assets-for-api-docs/assets/widgets/puffin.jpg',
       'tag': 'images',
     },
     <String, String>{
       'label': 'Butterfly Video (MP4)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
+      'url':
+          'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
       'tag': 'videos',
     },
   ];
+
+  /// 104 public network images (4 featured Flutter assets + 100 public Picsum photos)
+  /// for testing high-concurrency caching, scrolling, and cross-restart persistence.
+  static final List<Map<String, String>> _publicGalleryImages =
+      <Map<String, String>>[
+        <String, String>{
+          'title': '#1 Owl (Flutter Official Asset)',
+          'url':
+              'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+        },
+        <String, String>{
+          'title': '#2 Falcon (Pinned Asset)',
+          'url':
+              'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
+        },
+        <String, String>{
+          'title': '#3 Puffin (Circle Avatar Builder)',
+          'url':
+              'https://flutter.github.io/assets-for-api-docs/assets/widgets/puffin.jpg',
+        },
+        <String, String>{
+          'title': '#4 Owl-2 (Flutter Official Asset)',
+          'url':
+              'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl-2.jpg',
+        },
+        for (int i = 1; i <= 100; i++)
+          <String, String>{
+            'title': 'Public Photo #${i + 4} (Picsum ID ${i + 10})',
+            'url': 'https://picsum.photos/id/${i + 10}/400/300',
+          },
+      ];
 
   @override
   void initState() {
@@ -129,6 +165,12 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
       await _refreshDashboard();
     } catch (e) {
       _setLog('Initialization notice: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isReady = true;
+        });
+      }
     }
   }
 
@@ -140,13 +182,15 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   }
 
   Future<void> _applyConfiguration({bool silent = false}) async {
+    // Use default 'xue_hua_network_cache' subdirectory so any early/cold-start
+    // requests share the exact same persistent cache directory across restarts.
     final config = CacheManagerConfig(
       maxDiskCacheBytes: _maxQuotaMb * 1024 * 1024,
       maxEntries: 20000,
       defaultTtlSeconds: _defaultTtlSeconds,
       evictionPolicy: _evictionPolicy,
-      cacheSubdirectory: 'xue_hua_demo_cache',
-      maxConcurrentDownloads: 4,
+      cacheSubdirectory: 'xue_hua_network_cache',
+      maxConcurrentDownloads: 6,
       connectTimeoutMs: 15000,
       readTimeoutMs: 30000,
       defaultHeaders: const <String, String>{
@@ -249,6 +293,36 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
       await _refreshDashboard();
     } catch (e) {
       _setLog('Batch prefetch error: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isBusy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _handlePrefetchGalleryImages(int count) async {
+    setState(() {
+      _isBusy = true;
+    });
+    try {
+      final subset = _publicGalleryImages.take(count).toList();
+      final requests = subset
+          .map(
+            (item) => CacheRequest(
+              url: item['url']!,
+              tag: 'gallery',
+            ),
+          )
+          .toList();
+      final prefetched = await _cache.prefetchAll(requests);
+      _setLog(
+        'Prefetched ${prefetched.length}/$count gallery images into persistent disk cache.',
+      );
+      await _refreshDashboard();
+    } catch (e) {
+      _setLog('Gallery prefetch error: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -375,11 +449,15 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
               icon: const Icon(Icons.refresh),
             ),
           ],
-          bottom: const TabBar(
+          bottom: TabBar(
             isScrollable: true,
-            tabs: <Widget>[
+            onTap: (_) => _refreshDashboard(),
+            tabs: const <Widget>[
               Tab(icon: Icon(Icons.cloud_download), text: 'Download & Fetch'),
-              Tab(icon: Icon(Icons.photo_library), text: 'CachedNetworkImage'),
+              Tab(
+                icon: Icon(Icons.photo_library),
+                text: 'CachedNetworkImage (104)',
+              ),
               Tab(icon: Icon(Icons.folder_special), text: 'Cache Browser'),
               Tab(icon: Icon(Icons.memory), text: 'Manual Put & 10K Bench'),
               Tab(icon: Icon(Icons.tune), text: 'Config & Capabilities'),
@@ -390,15 +468,17 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
           children: <Widget>[
             _buildStatusBanner(),
             Expanded(
-              child: TabBarView(
-                children: <Widget>[
-                  _buildDownloadTab(),
-                  _buildCachedImageGalleryTab(),
-                  _buildCacheBrowserTab(),
-                  _buildManualPutTab(),
-                  _buildConfigAndCapabilitiesTab(),
-                ],
-              ),
+              child: !_isReady
+                  ? const Center(child: CircularProgressIndicator())
+                  : TabBarView(
+                      children: <Widget>[
+                        _buildDownloadTab(),
+                        _buildCachedImageGalleryTab(),
+                        _buildCacheBrowserTab(),
+                        _buildManualPutTab(),
+                        _buildConfigAndCapabilitiesTab(),
+                      ],
+                    ),
             ),
           ],
         ),
@@ -441,13 +521,18 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
               children: <Widget>[
                 Text(
                   'Event [${progress.state.wireValue}]: ',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 12,
+                    color: progress.state == CacheTransferState.failed
+                        ? Theme.of(context).colorScheme.error
+                        : null,
                   ),
                 ),
                 Expanded(
-                  child: LinearProgressIndicator(value: progress.progress),
+                  child: LinearProgressIndicator(
+                    value: progress.progress,
+                  ),
                 ),
                 const SizedBox(width: 8),
                 Text(
@@ -541,9 +626,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                           .map(
                             (alg) => DropdownMenuItem<CacheChecksumAlgorithm>(
                               value: alg,
-                              child: Text(
-                                'Hash: ${alg.wireValue.toUpperCase()}',
-                              ),
+                              child: Text('Hash: ${alg.wireValue.toUpperCase()}'),
                             ),
                           )
                           .toList(),
@@ -638,8 +721,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                       'Checksum (${res.entry.checksumAlgorithm.wireValue}): ${res.entry.checksum}',
                     ),
                   if (_previewBytes != null &&
-                      (res.entry.mimeType?.startsWith('image/') ??
-                          false)) ...<Widget>[
+                      (res.entry.mimeType?.startsWith('image/') ?? false)) ...<Widget>[
                     const SizedBox(height: 12),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
@@ -660,154 +742,183 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   }
 
   Widget _buildCachedImageGalleryTab() {
-    final galleryItems = <Map<String, String>>[
-      <String, String>{
-        'title': 'Owl (Downsampled 400px + Progress)',
-        'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
-      },
-      <String, String>{
-        'title': 'Falcon (Downsampled 400px + Pinned)',
-        'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
-      },
-      <String, String>{
-        'title': 'Puffin (Custom Circle imageBuilder)',
-        'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/puffin.jpg',
-      },
-      <String, String>{
-        'title': 'Broken URL (Error Widget Fallback)',
-        'url': 'https://invalid.xuehua.local/non_existent_image.png',
-      },
+    final items = <Map<String, String>>[
+      ..._publicGalleryImages,
+      if (_simulateBrokenCard)
+        const <String, String>{
+          'title': 'Simulated Broken URL (Error Widget Test)',
+          'url': 'https://invalid.xuehua.local/non_existent_image.png',
+        },
     ];
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    return Column(
       children: <Widget>[
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  'CachedNetworkImage & CachedNetworkImageProvider',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Zero-jank image caching with synchronous ImageCache fast-path, '
-                  'Engine IO ImmutableBuffer.fromFilePath decoding, and C++ codec downsampling (memCacheWidth).',
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 12,
-                  children: <Widget>[
-                    OutlinedButton.icon(
-                      onPressed: () {
-                        PaintingBinding.instance.imageCache.clear();
-                        setState(() {});
-                        _setLog(
-                          'Cleared Flutter in-memory ImageCache (next render will hit native disk cache).',
-                        );
-                      },
-                      icon: const Icon(Icons.memory),
-                      label: const Text('Clear Memory ImageCache'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () async {
-                        await _cache.removeByTag('gallery');
-                        PaintingBinding.instance.imageCache.clear();
-                        setState(() {});
-                        await _refreshDashboard();
-                        _setLog('Cleared gallery disk & memory cache.');
-                      },
-                      icon: const Icon(Icons.delete_sweep_outlined),
-                      label: const Text('Evict "gallery" Tag'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 320,
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: 1.1,
-          ),
-          itemCount: galleryItems.length,
-          itemBuilder: (context, index) {
-            final item = galleryItems[index];
-            final isCircleDemo = index == 2;
-            return Card(
-              clipBehavior: Clip.antiAlias,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Expanded(
-                    child: CachedNetworkImage(
-                      imageUrl: item['url']!,
-                      tag: 'gallery',
-                      pinned: index == 1,
-                      memCacheWidth: 400,
-                      fit: BoxFit.cover,
-                      imageBuilder: isCircleDemo
-                          ? (context, provider) => Center(
-                              child: CircleAvatar(
-                                radius: 64,
-                                backgroundImage: provider,
-                              ),
-                            )
-                          : null,
-                      progressIndicatorBuilder: (context, url, progress) {
-                        final double? ratio =
-                            progress?.expectedTotalBytes != null &&
-                                progress!.expectedTotalBytes! > 0
-                            ? progress.cumulativeBytesLoaded /
-                                  progress.expectedTotalBytes!
-                            : null;
-                        return Center(
-                          child: CircularProgressIndicator(value: ratio),
-                        );
-                      },
-                      errorWidget: (context, url, error, stackTrace) {
-                        return const Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              Icon(
-                                Icons.broken_image_outlined,
-                                size: 36,
-                                color: Colors.redAccent,
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'Load Failed (Fallback)',
-                                style: TextStyle(fontSize: 12),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          '104 Public Images Wall (CachedNetworkImage)',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
+                      FilterChip(
+                        label: const Text('Include Broken URL Test Card'),
+                        selected: _simulateBrokenCard,
+                        onSelected: (v) {
+                          setState(() {
+                            _simulateBrokenCard = v;
+                            if (!v &&
+                                _latestProgress?.state ==
+                                    CacheTransferState.failed) {
+                              _latestProgress = null;
+                            }
+                          });
+                        },
+                      ),
+                    ],
                   ),
-                  Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Text(
-                      item['title']!,
-                      style: Theme.of(context).textTheme.bodySmall,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: <Widget>[
+                      FilledButton.tonalIcon(
+                        onPressed: _isBusy
+                            ? null
+                            : () => _handlePrefetchGalleryImages(24),
+                        icon: const Icon(Icons.flash_on, size: 18),
+                        label: const Text('Prefetch First 24'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          PaintingBinding.instance.imageCache.clear();
+                          setState(() {});
+                          _setLog(
+                            'Cleared Flutter memory ImageCache. Scrolling now loads directly from persistent disk cache!',
+                          );
+                        },
+                        icon: const Icon(Icons.memory, size: 18),
+                        label: const Text('Clear Memory ImageCache Only'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final removed = await _cache.removeByTag('gallery');
+                          PaintingBinding.instance.imageCache.clear();
+                          setState(() {
+                            _latestProgress = null;
+                          });
+                          await _refreshDashboard();
+                          _setLog(
+                            'Evicted $removed "gallery" images from disk and memory cache.',
+                          );
+                        },
+                        icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                        label: const Text('Clear Disk & Memory ("gallery")'),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            );
-          },
+            ),
+          ),
+        ),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.all(16),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 240,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 1.05,
+            ),
+            itemCount: items.length,
+            itemBuilder: (context, index) {
+              final item = items[index];
+              final isCircleDemo = index == 2;
+              return Card(
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Expanded(
+                      child: CachedNetworkImage(
+                        imageUrl: item['url']!,
+                        tag: 'gallery',
+                        pinned: index == 1,
+                        memCacheWidth: 360,
+                        fit: BoxFit.cover,
+                        imageBuilder: isCircleDemo
+                            ? (context, provider) => Center(
+                                child: CircleAvatar(
+                                  radius: 52,
+                                  backgroundImage: provider,
+                                ),
+                              )
+                            : null,
+                        progressIndicatorBuilder: (context, url, progress) {
+                          final double? ratio =
+                              progress?.expectedTotalBytes != null &&
+                                  progress!.expectedTotalBytes! > 0
+                              ? progress.cumulativeBytesLoaded /
+                                    progress.expectedTotalBytes!
+                              : null;
+                          return Center(
+                            child: SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                value: ratio,
+                              ),
+                            ),
+                          );
+                        },
+                        errorWidget: (context, url, error, stackTrace) {
+                          return const Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                Icon(
+                                  Icons.broken_image_outlined,
+                                  size: 32,
+                                  color: Colors.redAccent,
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  'Load Failed',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      child: Text(
+                        item['title']!,
+                        style: Theme.of(context).textTheme.bodySmall,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
         ),
       ],
     );
@@ -869,9 +980,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
               FilledButton.tonalIcon(
                 onPressed: () async {
                   final count = await _cache.clearAll(includePinned: false);
-                  _setLog(
-                    'Cleared $count unpinned entries (pinned preserved).',
-                  );
+                  _setLog('Cleared $count unpinned entries (pinned preserved).');
                   await _refreshDashboard();
                 },
                 icon: const Icon(Icons.cleaning_services_outlined, size: 18),
@@ -905,9 +1014,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                       ),
                       child: ListTile(
                         leading: Icon(
-                          entry.pinned
-                              ? Icons.push_pin
-                              : Icons.insert_drive_file,
+                          entry.pinned ? Icons.push_pin : Icons.insert_drive_file,
                           color: entry.pinned
                               ? Theme.of(context).colorScheme.primary
                               : null,
@@ -1015,9 +1122,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                         );
                       },
                       icon: const Icon(Icons.search),
-                      label: const Text(
-                        'Check Offline Cache (getFileFromCache)',
-                      ),
+                      label: const Text('Check Offline Cache (getFileFromCache)'),
                     ),
                     OutlinedButton.icon(
                       onPressed: () async {
@@ -1061,7 +1166,9 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                           ? null
                           : () => _runBulkBenchmark(10000),
                       icon: const Icon(Icons.bolt),
-                      label: const Text('Run 10,000+ Entries Stress Benchmark'),
+                      label: const Text(
+                        'Run 10,000+ Entries Stress Benchmark',
+                      ),
                     ),
                   ],
                 ),

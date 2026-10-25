@@ -266,15 +266,73 @@ class XueHuaNaviteCacheManagerPlugin :
                 for (i in 0 until arr.length()) {
                     val item = arr.optJSONObject(i) ?: continue
                     val record = CacheRecord.fromJson(item)
-                    val f = File(record.filePath)
-                    if (record.key.isNotEmpty() && f.exists()) {
-                        entries[record.key] = record
-                        totalCachedBytes += record.sizeBytes
+                    val resolvedFile = resolveExistingFile(record)
+                    if (record.key.isNotEmpty() && resolvedFile != null) {
+                        val updatedRecord = if (resolvedFile.absolutePath != record.filePath) {
+                            record.copy(filePath = resolvedFile.absolutePath)
+                        } else {
+                            record
+                        }
+                        entries[updatedRecord.key] = updatedRecord
+                        totalCachedBytes += updatedRecord.sizeBytes
                     }
                 }
             } catch (_: Exception) {
                 // Recover cleanly if index file was corrupted.
             }
+            recoverOrphanedFilesOnDiskLocked()
+        }
+    }
+
+    private fun resolveExistingFile(record: CacheRecord): File? {
+        val direct = File(record.filePath)
+        if (direct.exists()) return direct
+        val fileName = direct.name
+        if (fileName.isNotEmpty()) {
+            val candidate = File(getCacheRootDir(), fileName)
+            if (candidate.exists()) return candidate
+        }
+        return null
+    }
+
+    private fun recoverOrphanedFilesOnDiskLocked() {
+        val dir = getCacheRootDir()
+        val files = dir.listFiles() ?: return
+        var recoveredAny = false
+        for (file in files) {
+            if (!file.isFile) continue
+            val name = file.name
+            if (name == "cache_index_v1.json" || name.endsWith(".tmp") || name.endsWith(".json")) {
+                continue
+            }
+            val key = file.nameWithoutExtension
+            if (key.isEmpty() || entries.containsKey(key)) continue
+            val size = file.length()
+            if (size <= 0L) continue
+            val modifiedMs = file.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
+            val record = CacheRecord(
+                key = key,
+                url = "cached://$key",
+                filePath = file.absolutePath,
+                sizeBytes = size,
+                createdAtMs = modifiedMs,
+                lastAccessedAtMs = modifiedMs,
+                expiresAtMs = modifiedMs + defaultTtlSeconds * 1000L,
+                hitCount = 1L,
+                tag = "recovered",
+                mimeType = "application/octet-stream",
+                eTag = null,
+                lastModified = null,
+                checksum = null,
+                checksumAlgorithm = "none",
+                pinned = false
+            )
+            entries[key] = record
+            totalCachedBytes += size
+            recoveredAny = true
+        }
+        if (recoveredAny) {
+            schedulePersistIndexLocked(immediate = true)
         }
     }
 
@@ -289,7 +347,7 @@ class XueHuaNaviteCacheManagerPlugin :
         } else {
             pendingPersistFuture = persistScheduler.schedule(
                 { flushIndexNow() },
-                600L,
+                80L,
                 TimeUnit.MILLISECONDS
             )
         }
@@ -702,7 +760,7 @@ class XueHuaNaviteCacheManagerPlugin :
                 if (autoTrimOnWrite) {
                     enforceQuotaLocked(maxDiskCacheBytes, key, checkOnlyFastPath = true)
                 }
-                schedulePersistIndexLocked()
+                schedulePersistIndexLocked(immediate = true)
             }
 
             emitProgress(key, url, "completed", record.sizeBytes, record.sizeBytes, record.filePath)
@@ -807,6 +865,14 @@ class XueHuaNaviteCacheManagerPlugin :
             record.hitCount += 1L
             hitCount += 1L
             schedulePersistIndexLocked()
+            emitProgress(
+                key,
+                record.url,
+                "cacheHit",
+                record.sizeBytes,
+                record.sizeBytes,
+                record.filePath
+            )
             result.success(record.toMap())
         }
     }

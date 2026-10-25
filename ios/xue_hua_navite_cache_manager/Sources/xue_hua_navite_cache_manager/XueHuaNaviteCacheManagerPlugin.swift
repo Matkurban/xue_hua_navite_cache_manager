@@ -31,7 +31,7 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
   private struct CacheRecord: Codable {
     let key: String
     let url: String
-    let filePath: String
+    var filePath: String
     let sizeBytes: Int64
     let createdAtMs: Int64
     var lastAccessedAtMs: Int64
@@ -165,10 +165,76 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     missCount = container.missCount
     evictionCount = container.evictionCount
     for record in container.entries {
-      if FileManager.default.fileExists(atPath: record.filePath) {
-        entries[record.key] = record
-        totalCachedBytes += record.sizeBytes
+      if let validPath = resolveExistingFilePath(record) {
+        var updated = record
+        updated.filePath = validPath
+        entries[updated.key] = updated
+        totalCachedBytes += updated.sizeBytes
       }
+    }
+    recoverOrphanedFilesOnDiskLocked()
+  }
+
+  private func resolveExistingFilePath(_ record: CacheRecord) -> String? {
+    if FileManager.default.fileExists(atPath: record.filePath) {
+      return record.filePath
+    }
+    let fileName = URL(fileURLWithPath: record.filePath).lastPathComponent
+    if !fileName.isEmpty {
+      let candidate = getCacheRootURL().appendingPathComponent(fileName).path
+      if FileManager.default.fileExists(atPath: candidate) {
+        return candidate
+      }
+    }
+    return nil
+  }
+
+  private func recoverOrphanedFilesOnDiskLocked() {
+    let rootURL = getCacheRootURL()
+    guard let fileURLs = try? FileManager.default.contentsOfDirectory(
+      at: rootURL,
+      includingPropertiesForKeys: [.fileSizeKey, .creationDateKey, .contentModificationDateKey],
+      options: [.skipsHiddenFiles]
+    ) else { return }
+
+    var recoveredAny = false
+    for fileURL in fileURLs {
+      let fileName = fileURL.lastPathComponent
+      if fileName == "cache_index_v1.json" || fileName.hasSuffix(".tmp") || fileName.hasSuffix(".json") {
+        continue
+      }
+      let key = fileURL.deletingPathExtension().lastPathComponent
+      if key.isEmpty || entries[key] != nil {
+        continue
+      }
+      let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .creationDateKey, .contentModificationDateKey])
+      let size = Int64(values?.fileSize ?? 0)
+      if size <= 0 { continue }
+      let createdMs = Int64((values?.creationDate ?? Date()).timeIntervalSince1970 * 1000)
+      let modifiedMs = Int64((values?.contentModificationDate ?? Date()).timeIntervalSince1970 * 1000)
+      let record = CacheRecord(
+        key: key,
+        url: "cached://\(key)",
+        filePath: fileURL.path,
+        sizeBytes: size,
+        createdAtMs: createdMs,
+        lastAccessedAtMs: modifiedMs,
+        expiresAtMs: modifiedMs + defaultTtlSeconds * 1000,
+        hitCount: 1,
+        tag: "recovered",
+        mimeType: "application/octet-stream",
+        eTag: nil,
+        lastModified: nil,
+        checksum: nil,
+        checksumAlgorithm: "none",
+        pinned: false
+      )
+      entries[key] = record
+      totalCachedBytes += size
+      recoveredAny = true
+    }
+    if recoveredAny {
+      schedulePersistIndexLocked(immediate: true)
     }
   }
 
@@ -181,7 +247,7 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     if immediate {
       persistQueue.async(execute: work)
     } else {
-      persistQueue.asyncAfter(deadline: .now() + 0.6, execute: work)
+      persistQueue.asyncAfter(deadline: .now() + 0.08, execute: work)
     }
   }
 
@@ -572,7 +638,7 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     if autoTrimOnWrite {
       _ = enforceQuotaLocked(targetMaxBytes: maxDiskCacheBytes, protectedKey: key, checkOnlyFastPath: true)
     }
-    schedulePersistIndexLocked()
+    schedulePersistIndexLocked(immediate: true)
     lock.unlock()
 
     emitProgress(key: key, url: urlString, state: "completed", bytesReceived: byteCount, totalBytes: byteCount, filePath: destURL.path)
@@ -647,6 +713,7 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     entries[key] = record
     hitCount += 1
     schedulePersistIndexLocked()
+    emitProgress(key: key, url: record.url, state: "cacheHit", bytesReceived: record.sizeBytes, totalBytes: record.sizeBytes, filePath: record.filePath)
     result(record.toMap())
   }
 

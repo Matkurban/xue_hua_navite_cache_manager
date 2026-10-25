@@ -376,12 +376,14 @@ void EmitProgress(XueHuaNaviteCacheManagerPlugin* self,
 bool DownloadViaCurlOrGio(const std::string& url,
                           const std::string& dest_tmp_path,
                           int timeout_sec,
+                          const std::string& extra_headers,
                           std::string* out_err) {
   gchar* quoted_url = g_shell_quote(url.c_str());
   gchar* quoted_dest = g_shell_quote(dest_tmp_path.c_str());
   g_autofree gchar* cmd = g_strdup_printf(
-      "curl -sS -L --fail --max-time %d -o %s %s",
-      timeout_sec > 0 ? timeout_sec : 30, quoted_dest, quoted_url);
+      "curl -sS -L --fail --max-time %d%s -o %s %s",
+      timeout_sec > 0 ? timeout_sec : 30, extra_headers.c_str(), quoted_dest,
+      quoted_url);
   g_free(quoted_url);
   g_free(quoted_dest);
 
@@ -465,7 +467,26 @@ FlMethodResponse* HandleDownloadRequest(XueHuaNaviteCacheManagerPlugin* self,
   std::string dl_err;
   int timeout_sec = (g_connect_timeout_ms + g_read_timeout_ms) / 1000;
 
-  if (!DownloadViaCurlOrGio(url, tmp_path, timeout_sec, &dl_err)) {
+  std::string extra_headers;
+  if (g_respect_http_cache_headers && has_existing) {
+    if (!existing.etag.empty()) {
+      std::string hdr = "If-None-Match: " + existing.etag;
+      gchar* quoted = g_shell_quote(hdr.c_str());
+      extra_headers += " -H ";
+      extra_headers += quoted;
+      g_free(quoted);
+    }
+    if (!existing.last_modified.empty()) {
+      std::string hdr = "If-Modified-Since: " + existing.last_modified;
+      gchar* quoted = g_shell_quote(hdr.c_str());
+      extra_headers += " -H ";
+      extra_headers += quoted;
+      g_free(quoted);
+    }
+  }
+
+  if (!DownloadViaCurlOrGio(url, tmp_path, timeout_sec, extra_headers,
+                            &dl_err)) {
     std::remove(tmp_path.c_str());
     if (fallback_on_error && has_existing) {
       g_autoptr(FlValue) res = fl_value_new_map();
@@ -590,6 +611,12 @@ static void xue_hua_navite_cache_manager_plugin_handle_method_call(
     if (!subdir.empty()) g_cache_subdirectory = subdir;
     g_auto_trim_on_write =
         GetFlBool(args, "autoTrimOnWrite", g_auto_trim_on_write);
+    g_respect_http_cache_headers = GetFlBool(
+        args, "respectHttpCacheHeaders", g_respect_http_cache_headers);
+    g_connect_timeout_ms = static_cast<int>(
+        GetFlInt(args, "connectTimeoutMs", g_connect_timeout_ms));
+    g_read_timeout_ms = static_cast<int>(
+        GetFlInt(args, "readTimeoutMs", g_read_timeout_ms));
     if (g_auto_trim_on_write) {
       EnforceQuotaLocked(g_max_disk_cache_bytes, "");
       PersistIndexLocked();

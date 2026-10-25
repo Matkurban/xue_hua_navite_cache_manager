@@ -1,3 +1,7 @@
+## 1.1.1
+
+* Fixed Windows `CMakeLists.txt` native-test gate: `if(FALSE AND ${include_..._tests})` expanded to invalid `if(FALSE AND)` when the variable was unset, breaking host app `flutter build windows`.
+
 ## 1.1.0
 
 * Added a bounded native download concurrency pool controlled by `maxConcurrentDownloads` across Android, iOS, macOS, Windows, Linux, and Web, so large batches (e.g. 100+ images) stay controlled instead of flooding the network stack.

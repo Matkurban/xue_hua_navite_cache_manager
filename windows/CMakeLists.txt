@@ -65,7 +65,9 @@ set(xue_hua_navite_cache_manager_bundled_libraries
 # tests cover the MethodChannel API. googletest pin kept for easy re-enable.
 # Only enable test builds when building the example (which sets this variable)
 # so that plugin clients aren't building the tests.
-if (FALSE AND ${include_${PROJECT_NAME}_tests})
+# Disabled: `FALSE AND ${unset}` expands to `if(FALSE AND)` which CMake rejects.
+# Re-enable with: if(${include_${PROJECT_NAME}_tests})
+if(FALSE)
 set(TEST_RUNNER "${PROJECT_NAME}_test")
 enable_testing()
 

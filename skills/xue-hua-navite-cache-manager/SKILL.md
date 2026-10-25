@@ -4,7 +4,7 @@ description: Use when the user is working with xue_hua_navite_cache_manager APIs
 ---
 # xue-hua-navite-cache-manager
 
-Provide idiomatic integration patterns, zero-jank image rendering guidelines, platform setup rules, and best practices for the `xue_hua_navite_cache_manager` Flutter plugin (`v1.1.0+`) across Android, iOS, macOS, Windows, Linux, and Web.
+Provide idiomatic integration patterns, zero-jank image rendering guidelines, platform setup rules, and best practices for the `xue_hua_navite_cache_manager` Flutter plugin (`v1.1.1+`) across Android, iOS, macOS, Windows, Linux, and Web.
 
 ## When to Use
 

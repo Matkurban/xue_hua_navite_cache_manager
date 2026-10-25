@@ -38,7 +38,8 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   final XueHuaNaviteCacheManager _cache = XueHuaNaviteCacheManager.instance;
 
   final TextEditingController _urlController = TextEditingController(
-    text: 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+    text:
+        'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
   );
   final TextEditingController _customKeyController = TextEditingController();
   final TextEditingController _tagController = TextEditingController(
@@ -67,7 +68,8 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   CacheProgressEvent? _latestProgress;
   CacheFetchResult? _lastFetchResult;
   Uint8List? _previewBytes;
-  String _statusLog = 'Ready. Configure or download a network file to inspect caching.';
+  String _statusLog =
+      'Ready. Configure or download a network file to inspect caching.';
   bool _isBusy = false;
 
   StreamSubscription<CacheProgressEvent>? _progressSub;
@@ -382,9 +384,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                   ),
                 ),
                 Expanded(
-                  child: LinearProgressIndicator(
-                    value: progress.progress,
-                  ),
+                  child: LinearProgressIndicator(value: progress.progress),
                 ),
                 const SizedBox(width: 8),
                 Text(
@@ -478,7 +478,9 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                           .map(
                             (alg) => DropdownMenuItem<CacheChecksumAlgorithm>(
                               value: alg,
-                              child: Text('Hash: ${alg.wireValue.toUpperCase()}'),
+                              child: Text(
+                                'Hash: ${alg.wireValue.toUpperCase()}',
+                              ),
                             ),
                           )
                           .toList(),
@@ -573,7 +575,8 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                       'Checksum (${res.entry.checksumAlgorithm.wireValue}): ${res.entry.checksum}',
                     ),
                   if (_previewBytes != null &&
-                      (res.entry.mimeType?.startsWith('image/') ?? false)) ...<Widget>[
+                      (res.entry.mimeType?.startsWith('image/') ??
+                          false)) ...<Widget>[
                     const SizedBox(height: 12),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
@@ -649,7 +652,9 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
               FilledButton.tonalIcon(
                 onPressed: () async {
                   final count = await _cache.clearAll(includePinned: false);
-                  _setLog('Cleared $count unpinned entries (pinned preserved).');
+                  _setLog(
+                    'Cleared $count unpinned entries (pinned preserved).',
+                  );
                   await _refreshDashboard();
                 },
                 icon: const Icon(Icons.cleaning_services_outlined, size: 18),
@@ -683,7 +688,9 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                       ),
                       child: ListTile(
                         leading: Icon(
-                          entry.pinned ? Icons.push_pin : Icons.insert_drive_file,
+                          entry.pinned
+                              ? Icons.push_pin
+                              : Icons.insert_drive_file,
                           color: entry.pinned
                               ? Theme.of(context).colorScheme.primary
                               : null,
@@ -791,7 +798,9 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                         );
                       },
                       icon: const Icon(Icons.search),
-                      label: const Text('Check Offline Cache (getFileFromCache)'),
+                      label: const Text(
+                        'Check Offline Cache (getFileFromCache)',
+                      ),
                     ),
                     OutlinedButton.icon(
                       onPressed: () async {

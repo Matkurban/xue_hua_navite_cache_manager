@@ -141,7 +141,10 @@ class CacheManagerConfig {
   }) : assert(maxDiskCacheBytes > 0, 'maxDiskCacheBytes must be positive'),
        assert(maxEntries > 0, 'maxEntries must be positive'),
        assert(defaultTtlSeconds >= 0, 'defaultTtlSeconds must be non-negative'),
-       assert(maxConcurrentDownloads > 0, 'maxConcurrentDownloads must be positive');
+       assert(
+         maxConcurrentDownloads > 0,
+         'maxConcurrentDownloads must be positive',
+       );
 
   /// Maximum total bytes stored on disk before automatic eviction is triggered.
   /// Defaults to 500 MB (`524,288,000` bytes).
@@ -397,8 +400,10 @@ class CacheEntry {
       DateTime.fromMillisecondsSinceEpoch(createdAtMs, isUtc: true).toLocal();
 
   /// Last access timestamp as a [DateTime].
-  DateTime get lastAccessedAt =>
-      DateTime.fromMillisecondsSinceEpoch(lastAccessedAtMs, isUtc: true).toLocal();
+  DateTime get lastAccessedAt => DateTime.fromMillisecondsSinceEpoch(
+    lastAccessedAtMs,
+    isUtc: true,
+  ).toLocal();
 
   /// Expiration timestamp as a [DateTime].
   DateTime get expiresAt =>

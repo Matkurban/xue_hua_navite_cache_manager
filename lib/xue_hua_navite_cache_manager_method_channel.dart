@@ -66,9 +66,7 @@ class MethodChannelXueHuaNaviteCacheManager
   Future<List<CacheEntry>> prefetchAll(List<CacheRequest> requests) async {
     final result = await methodChannel.invokeListMethod<Object?>(
       'prefetchAll',
-      <String, Object?>{
-        'requests': requests.map((r) => r.toMap()).toList(),
-      },
+      <String, Object?>{'requests': requests.map((r) => r.toMap()).toList()},
     );
     if (result == null) {
       return const <CacheEntry>[];
@@ -95,10 +93,7 @@ class MethodChannelXueHuaNaviteCacheManager
   }) async {
     final result = await methodChannel.invokeMapMethod<Object?, Object?>(
       'getFileFromCache',
-      <String, Object?>{
-        'keyOrUrl': keyOrUrl,
-        'ignoreExpired': ignoreExpired,
-      },
+      <String, Object?>{'keyOrUrl': keyOrUrl, 'ignoreExpired': ignoreExpired},
     );
     if (result == null || result.isEmpty) {
       return null;
@@ -113,10 +108,7 @@ class MethodChannelXueHuaNaviteCacheManager
   }) async {
     final bytes = await methodChannel.invokeMethod<Uint8List>(
       'readCacheBytes',
-      <String, Object?>{
-        'keyOrUrl': keyOrUrl,
-        'ignoreExpired': ignoreExpired,
-      },
+      <String, Object?>{'keyOrUrl': keyOrUrl, 'ignoreExpired': ignoreExpired},
     );
     return bytes;
   }
@@ -125,10 +117,7 @@ class MethodChannelXueHuaNaviteCacheManager
   Future<bool> containsKey(String keyOrUrl, {bool ignoreExpired = true}) async {
     final exists = await methodChannel.invokeMethod<bool>(
       'containsKey',
-      <String, Object?>{
-        'keyOrUrl': keyOrUrl,
-        'ignoreExpired': ignoreExpired,
-      },
+      <String, Object?>{'keyOrUrl': keyOrUrl, 'ignoreExpired': ignoreExpired},
     );
     return exists ?? false;
   }
@@ -203,10 +192,7 @@ class MethodChannelXueHuaNaviteCacheManager
   Future<bool> setPinned(String keyOrUrl, {required bool pinned}) async {
     final updated = await methodChannel.invokeMethod<bool>(
       'setPinned',
-      <String, Object?>{
-        'keyOrUrl': keyOrUrl,
-        'pinned': pinned,
-      },
+      <String, Object?>{'keyOrUrl': keyOrUrl, 'pinned': pinned},
     );
     return updated ?? false;
   }
@@ -260,10 +246,7 @@ class MethodChannelXueHuaNaviteCacheManager
   }) async {
     final result = await methodChannel.invokeListMethod<Object?>(
       'listEntries',
-      <String, Object?>{
-        'tag': tag,
-        'includeExpired': includeExpired,
-      },
+      <String, Object?>{'tag': tag, 'includeExpired': includeExpired},
     );
     if (result == null) {
       return const <CacheEntry>[];

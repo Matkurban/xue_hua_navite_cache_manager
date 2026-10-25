@@ -41,8 +41,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
   int _missCount = 0;
   int _evictionCount = 0;
 
-  String get _storageKey =>
-      'xue_hua_cache_index_${_config.cacheSubdirectory}';
+  String get _storageKey => 'xue_hua_cache_index_${_config.cacheSubdirectory}';
 
   @override
   Stream<CacheProgressEvent> get progressStream => _progressController.stream;
@@ -59,9 +58,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
           if (entriesList is List) {
             for (final item in entriesList) {
               if (item is Map) {
-                final entry = CacheEntry.fromMap(
-                  item.cast<Object?, Object?>(),
-                );
+                final entry = CacheEntry.fromMap(item.cast<Object?, Object?>());
                 _index[entry.key] = entry;
               }
             }
@@ -110,10 +107,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
           .toDart;
       final jsBytes = bytes.toJS;
       final blobParts = <JSAny>[jsBytes].toJS;
-      final blob = web.Blob(
-        blobParts,
-        web.BlobPropertyBag(type: mimeType),
-      );
+      final blob = web.Blob(blobParts, web.BlobPropertyBag(type: mimeType));
       final oldUrl = _blobUrls[key];
       if (oldUrl != null) {
         web.URL.revokeObjectURL(oldUrl);
@@ -121,8 +115,9 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       _blobUrls[key] = web.URL.createObjectURL(blob);
       final responseInit = web.ResponseInit(
         status: 200,
-        headers: (<String, String>{'Content-Type': mimeType}).jsify()
-            as web.HeadersInit,
+        headers:
+            (<String, String>{'Content-Type': mimeType}).jsify()
+                as web.HeadersInit,
       );
       final response = web.Response(blob, responseInit);
       await cache.put('https://xuehua.cache.local/$key'.toJS, response).toDart;
@@ -352,8 +347,8 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       if (request.checksumAlgorithm != CacheChecksumAlgorithm.none) {
         computedChecksum =
             request.checksumAlgorithm == CacheChecksumAlgorithm.md5
-                ? CacheHashUtils.md5Hex(bytes)
-                : CacheHashUtils.sha256Hex(bytes);
+            ? CacheHashUtils.md5Hex(bytes)
+            : CacheHashUtils.sha256Hex(bytes);
         if (request.expectedChecksum != null &&
             request.expectedChecksum!.isNotEmpty &&
             computedChecksum.toLowerCase() !=
@@ -391,7 +386,8 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       final entry = CacheEntry(
         key: key,
         url: request.url,
-        filePath: _blobUrls[key] ?? 'web-cache://${_config.cacheSubdirectory}/$key',
+        filePath:
+            _blobUrls[key] ?? 'web-cache://${_config.cacheSubdirectory}/$key',
         sizeBytes: bytes.length,
         createdAtMs: now,
         lastAccessedAtMs: now,
@@ -472,7 +468,8 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
   Future<bool> cancelDownload(String keyOrUrl) async {
     _ensureInitialized();
     final key = _resolveKey(keyOrUrl);
-    final controller = _activeAborts.remove(key) ?? _activeAborts.remove(keyOrUrl);
+    final controller =
+        _activeAborts.remove(key) ?? _activeAborts.remove(keyOrUrl);
     if (controller != null) {
       controller.abort();
       _progressController.add(
@@ -573,7 +570,8 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
     final entry = CacheEntry(
       key: key,
       url: url ?? 'local://$key',
-      filePath: _blobUrls[key] ?? 'web-cache://${_config.cacheSubdirectory}/$key',
+      filePath:
+          _blobUrls[key] ?? 'web-cache://${_config.cacheSubdirectory}/$key',
       sizeBytes: bytes.length,
       createdAtMs: now,
       lastAccessedAtMs: now,
@@ -698,10 +696,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
     return _enforceQuota(targetMaxBytes: maxBytes);
   }
 
-  Future<int> _enforceQuota({
-    int? targetMaxBytes,
-    String? protectedKey,
-  }) async {
+  Future<int> _enforceQuota({int? targetMaxBytes, String? protectedKey}) async {
     var evicted = await removeExpired();
     final maxAllowedBytes = targetMaxBytes ?? _config.maxDiskCacheBytes;
     final maxAllowedEntries = _config.maxEntries;
@@ -822,8 +817,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       supportsConditionalHttpRevalidation: true,
       supportsNativeCryptoHash: true,
       supportsLowDiskSpaceNotifications: false,
-      storageMechanism:
-          'Browser CacheStorage API (window.caches) + Object URLs + localStorage Index',
+      storageMechanism: 'Browser CacheStorage API (window.caches) + Object URLs + localStorage Index',
       defaultCacheRootPath: 'CacheStorage://${_config.cacheSubdirectory}',
     );
   }

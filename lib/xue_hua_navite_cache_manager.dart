@@ -110,10 +110,7 @@ class XueHuaNaviteCacheManager {
     String keyOrUrl, {
     bool ignoreExpired = true,
   }) {
-    return _platform.getFileFromCache(
-      keyOrUrl,
-      ignoreExpired: ignoreExpired,
-    );
+    return _platform.getFileFromCache(keyOrUrl, ignoreExpired: ignoreExpired);
   }
 
   /// Reads the raw binary [Uint8List] of a cached entry by [keyOrUrl], or fetches
@@ -122,10 +119,7 @@ class XueHuaNaviteCacheManager {
     String keyOrUrl, {
     bool ignoreExpired = true,
   }) {
-    return _platform.readCacheBytes(
-      keyOrUrl,
-      ignoreExpired: ignoreExpired,
-    );
+    return _platform.readCacheBytes(keyOrUrl, ignoreExpired: ignoreExpired);
   }
 
   /// Checks whether a valid cached entry currently exists for [keyOrUrl].
@@ -220,10 +214,7 @@ class XueHuaNaviteCacheManager {
     String? tag,
     bool includeExpired = true,
   }) {
-    return _platform.listEntries(
-      tag: tag,
-      includeExpired: includeExpired,
-    );
+    return _platform.listEntries(tag: tag, includeExpired: includeExpired);
   }
 
   /// Retrieves live cache metrics including total bytes, hit/miss ratios, and per-tag breakdown.

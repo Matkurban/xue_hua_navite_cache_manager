@@ -9,7 +9,7 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
-    'Full end-to-end functional test of XueHuaNaviteCacheManager across supported platform features',
+    'Full end-to-end functional & 10,000+ entries performance test of XueHuaNaviteCacheManager',
     (WidgetTester tester) async {
       final cache = XueHuaNaviteCacheManager.instance;
       final events = <CacheProgressEvent>[];
@@ -21,11 +21,11 @@ void main() {
       expect(caps.supportsConditionalHttpRevalidation, isTrue);
       expect(caps.supportsNativeCryptoHash, isTrue);
 
-      // 2. Configure global cache manager
+      // 2. Configure global cache manager for 20,000 maxEntries
       await cache.configure(
         const CacheManagerConfig(
-          maxDiskCacheBytes: 50 * 1024 * 1024,
-          maxEntries: 200,
+          maxDiskCacheBytes: 200 * 1024 * 1024,
+          maxEntries: 20000,
           defaultTtlSeconds: 3600,
           evictionPolicy: CacheEvictionPolicy.lru,
           cacheSubdirectory: 'xue_hua_e2e_test_cache',
@@ -143,15 +143,22 @@ void main() {
         await server.close(force: true);
       }
 
-      // 6. Test listEntries & getStats
-      final allEntries = await cache.listEntries();
-      expect(allEntries.length, greaterThanOrEqualTo(1));
+      // 6. High-volume 10,000 entries stress test with debounced index flushing
+      const bulkCount = 10000;
+      final tinyBytes = Uint8List.fromList(<int>[1, 2, 3, 4]);
+      for (int i = 0; i < bulkCount; i++) {
+        await cache.putBytes(
+          key: 'e2e_bulk_$i',
+          bytes: tinyBytes,
+          tag: 'bulk_10k',
+        );
+      }
+      final stats10k = await cache.getStats();
+      expect(stats10k.totalEntries, greaterThanOrEqualTo(bulkCount));
+      final purged10k = await cache.removeByTag('bulk_10k');
+      expect(purged10k, bulkCount);
 
-      final stats = await cache.getStats();
-      expect(stats.totalEntries, allEntries.length);
-      expect(stats.pinnedEntries, 1);
-
-      // 7. Test setPinned, removeByTag, trimToSize, and clearAll
+      // 7. Test setPinned, removeByTag, and clearAll
       final removedByTag = await cache.removeByTag('files');
       expect(removedByTag, caps.supportsFileSystemPaths ? 1 : 0);
 

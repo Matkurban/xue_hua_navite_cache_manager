@@ -87,7 +87,7 @@ class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin {
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> event_sink_;
 
   int64_t max_disk_cache_bytes_ = 500LL * 1024LL * 1024LL;
-  int max_entries_ = 2000;
+  int max_entries_ = 20000;
   int64_t default_ttl_seconds_ = 7LL * 24LL * 3600LL;
   std::string eviction_policy_ = "lru";
   std::string cache_subdirectory_ = "xue_hua_network_cache";
@@ -99,6 +99,7 @@ class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin {
   bool auto_trim_on_write_ = true;
 
   std::map<std::string, CacheRecord> entries_;
+  int64_t total_cached_bytes_ = 0;
   int64_t hit_count_ = 0;
   int64_t miss_count_ = 0;
   int64_t eviction_count_ = 0;

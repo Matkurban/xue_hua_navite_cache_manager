@@ -11,8 +11,8 @@ import 'src/cache_models.dart';
 import 'xue_hua_navite_cache_manager_platform_interface.dart';
 
 /// Web implementation of [XueHuaNaviteCacheManagerPlatform] backed by the browser
-/// `CacheStorage` API (`window.caches`), `localStorage` metadata index, `fetch()`,
-/// and `Blob` object URLs with automatic in-memory fallback.
+/// `CacheStorage` API (`window.caches`), debounced `localStorage` metadata index,
+/// `fetch()`, and `Blob` object URLs with O(1) running byte tracking for 10,000+ entries.
 class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
   /// Constructs a [XueHuaNaviteCacheManagerWeb].
   XueHuaNaviteCacheManagerWeb();
@@ -35,11 +35,14 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       <String, Future<CacheFetchResult>>{};
 
   bool _initialized = false;
+  int _totalCachedBytes = 0;
   int _hitCount = 0;
   int _missCount = 0;
   int _evictionCount = 0;
+  Timer? _persistDebounceTimer;
 
-  String get _storageKey => 'xue_hua_cache_index_${_config.cacheSubdirectory}';
+  String get _storageKey =>
+      'xue_hua_cache_index_${_config.cacheSubdirectory}';
 
   @override
   Stream<CacheProgressEvent> get progressStream => _progressController.stream;
@@ -47,6 +50,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
   void _ensureInitialized() {
     if (_initialized) return;
     _initialized = true;
+    _totalCachedBytes = 0;
     try {
       final raw = web.window.localStorage.getItem(_storageKey);
       if (raw != null && raw.isNotEmpty) {
@@ -56,8 +60,11 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
           if (entriesList is List) {
             for (final item in entriesList) {
               if (item is Map) {
-                final entry = CacheEntry.fromMap(item.cast<Object?, Object?>());
+                final entry = CacheEntry.fromMap(
+                  item.cast<Object?, Object?>(),
+                );
                 _index[entry.key] = entry;
+                _totalCachedBytes += entry.sizeBytes;
               }
             }
           }
@@ -71,7 +78,21 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
     }
   }
 
-  void _persistIndex() {
+  /// Schedules a debounced index persistence so high-frequency operations across
+  /// 10,000+ entries coalesce into a single background write.
+  void _schedulePersistIndex({bool immediate = false}) {
+    _persistDebounceTimer?.cancel();
+    if (immediate) {
+      _flushIndexToStorage();
+      return;
+    }
+    _persistDebounceTimer = Timer(
+      const Duration(milliseconds: 600),
+      _flushIndexToStorage,
+    );
+  }
+
+  void _flushIndexToStorage() {
     try {
       final payload = jsonEncode(<String, Object?>{
         'hitCount': _hitCount,
@@ -105,7 +126,10 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
           .toDart;
       final jsBytes = bytes.toJS;
       final blobParts = <JSAny>[jsBytes].toJS;
-      final blob = web.Blob(blobParts, web.BlobPropertyBag(type: mimeType));
+      final blob = web.Blob(
+        blobParts,
+        web.BlobPropertyBag(type: mimeType),
+      );
       final oldUrl = _blobUrls[key];
       if (oldUrl != null) {
         web.URL.revokeObjectURL(oldUrl);
@@ -113,9 +137,8 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       _blobUrls[key] = web.URL.createObjectURL(blob);
       final responseInit = web.ResponseInit(
         status: 200,
-        headers:
-            (<String, String>{'Content-Type': mimeType}).jsify()
-                as web.HeadersInit,
+        headers: (<String, String>{'Content-Type': mimeType}).jsify()
+            as web.HeadersInit,
       );
       final response = web.Response(blob, responseInit);
       await cache.put('https://xuehua.cache.local/$key'.toJS, response).toDart;
@@ -220,7 +243,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
           pinned: request.pinned || existing.pinned,
         );
         _index[key] = updated;
-        _persistIndex();
+        _schedulePersistIndex();
         _progressController.add(
           CacheProgressEvent(
             key: key,
@@ -301,7 +324,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
           pinned: request.pinned || existing.pinned,
         );
         _index[key] = refreshed;
-        _persistIndex();
+        _schedulePersistIndex();
         _progressController.add(
           CacheProgressEvent(
             key: key,
@@ -345,8 +368,8 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       if (request.checksumAlgorithm != CacheChecksumAlgorithm.none) {
         computedChecksum =
             request.checksumAlgorithm == CacheChecksumAlgorithm.md5
-            ? CacheHashUtils.md5Hex(bytes)
-            : CacheHashUtils.sha256Hex(bytes);
+                ? CacheHashUtils.md5Hex(bytes)
+                : CacheHashUtils.sha256Hex(bytes);
         if (request.expectedChecksum != null &&
             request.expectedChecksum!.isNotEmpty &&
             computedChecksum.toLowerCase() !=
@@ -384,8 +407,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       final entry = CacheEntry(
         key: key,
         url: request.url,
-        filePath:
-            _blobUrls[key] ?? 'web-cache://${_config.cacheSubdirectory}/$key',
+        filePath: _blobUrls[key] ?? 'web-cache://${_config.cacheSubdirectory}/$key',
         sizeBytes: bytes.length,
         createdAtMs: now,
         lastAccessedAtMs: now,
@@ -400,11 +422,17 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
         pinned: request.pinned,
       );
 
+      final previous = _index[key];
+      if (previous != null) {
+        _totalCachedBytes -= previous.sizeBytes;
+      }
       _index[key] = entry;
+      _totalCachedBytes += entry.sizeBytes;
+
       if (_config.autoTrimOnWrite) {
         await _enforceQuota(protectedKey: key);
       }
-      _persistIndex();
+      _schedulePersistIndex();
 
       _progressController.add(
         CacheProgressEvent(
@@ -520,7 +548,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
     );
     _index[key] = updated;
     _hitCount++;
-    _persistIndex();
+    _schedulePersistIndex();
     return updated;
   }
 
@@ -568,8 +596,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
     final entry = CacheEntry(
       key: key,
       url: url ?? 'local://$key',
-      filePath:
-          _blobUrls[key] ?? 'web-cache://${_config.cacheSubdirectory}/$key',
+      filePath: _blobUrls[key] ?? 'web-cache://${_config.cacheSubdirectory}/$key',
       sizeBytes: bytes.length,
       createdAtMs: now,
       lastAccessedAtMs: now,
@@ -581,11 +608,17 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       checksumAlgorithm: CacheChecksumAlgorithm.sha256,
       pinned: pinned,
     );
+    final previous = _index[key];
+    if (previous != null) {
+      _totalCachedBytes -= previous.sizeBytes;
+    }
     _index[key] = entry;
+    _totalCachedBytes += entry.sizeBytes;
+
     if (_config.autoTrimOnWrite) {
       await _enforceQuota(protectedKey: key);
     }
-    _persistIndex();
+    _schedulePersistIndex();
     return entry;
   }
 
@@ -638,7 +671,7 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       checksumAlgorithm: existing.checksumAlgorithm,
       pinned: pinned,
     );
-    _persistIndex();
+    _schedulePersistIndex();
     return true;
   }
 
@@ -648,8 +681,10 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
     final key = _resolveKey(keyOrUrl);
     final removed = _index.remove(key);
     if (removed == null) return false;
+    _totalCachedBytes -= removed.sizeBytes;
+    if (_totalCachedBytes < 0) _totalCachedBytes = 0;
     await _deleteBrowserCacheEntry(key);
-    _persistIndex();
+    _schedulePersistIndex();
     return true;
   }
 
@@ -661,11 +696,15 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
         .map((e) => e.key)
         .toList();
     for (final key in keysToRemove) {
-      _index.remove(key);
+      final removed = _index.remove(key);
+      if (removed != null) {
+        _totalCachedBytes -= removed.sizeBytes;
+      }
       await _deleteBrowserCacheEntry(key);
     }
+    if (_totalCachedBytes < 0) _totalCachedBytes = 0;
     if (keysToRemove.isNotEmpty) {
-      _persistIndex();
+      _schedulePersistIndex();
     }
     return keysToRemove.length;
   }
@@ -678,12 +717,16 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
         .map((e) => e.key)
         .toList();
     for (final key in expiredKeys) {
-      _index.remove(key);
+      final removed = _index.remove(key);
+      if (removed != null) {
+        _totalCachedBytes -= removed.sizeBytes;
+      }
       await _deleteBrowserCacheEntry(key);
     }
+    if (_totalCachedBytes < 0) _totalCachedBytes = 0;
     if (expiredKeys.isNotEmpty) {
       _evictionCount += expiredKeys.length;
-      _persistIndex();
+      _schedulePersistIndex();
     }
     return expiredKeys.length;
   }
@@ -694,17 +737,27 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
     return _enforceQuota(targetMaxBytes: maxBytes);
   }
 
-  Future<int> _enforceQuota({int? targetMaxBytes, String? protectedKey}) async {
-    var evicted = await removeExpired();
+  Future<int> _enforceQuota({
+    int? targetMaxBytes,
+    String? protectedKey,
+  }) async {
     final maxAllowedBytes = targetMaxBytes ?? _config.maxDiskCacheBytes;
     final maxAllowedEntries = _config.maxEntries;
 
+    // O(1) fast-path check: skip full map scan if within quota
+    if (targetMaxBytes == null &&
+        _totalCachedBytes <= maxAllowedBytes &&
+        _index.length <= maxAllowedEntries) {
+      return 0;
+    }
+
+    var evicted = await removeExpired();
     if (_config.evictionPolicy == CacheEvictionPolicy.ttlOnly) {
       return evicted;
     }
 
-    var totalBytes = _index.values.fold<int>(0, (sum, e) => sum + e.sizeBytes);
-    if (totalBytes <= maxAllowedBytes && _index.length <= maxAllowedEntries) {
+    if (_totalCachedBytes <= maxAllowedBytes &&
+        _index.length <= maxAllowedEntries) {
       return evicted;
     }
 
@@ -729,18 +782,22 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
     });
 
     for (final candidate in candidates) {
-      if (totalBytes <= maxAllowedBytes && _index.length <= maxAllowedEntries) {
+      if (_totalCachedBytes <= maxAllowedBytes &&
+          _index.length <= maxAllowedEntries) {
         break;
       }
-      _index.remove(candidate.key);
+      final removed = _index.remove(candidate.key);
+      if (removed != null) {
+        _totalCachedBytes -= removed.sizeBytes;
+      }
       await _deleteBrowserCacheEntry(candidate.key);
-      totalBytes -= candidate.sizeBytes;
       evicted++;
       _evictionCount++;
     }
 
+    if (_totalCachedBytes < 0) _totalCachedBytes = 0;
     if (evicted > 0) {
-      _persistIndex();
+      _schedulePersistIndex();
     }
     return evicted;
   }
@@ -753,10 +810,14 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
         .map((e) => e.key)
         .toList();
     for (final key in keysToRemove) {
-      _index.remove(key);
+      final removed = _index.remove(key);
+      if (removed != null) {
+        _totalCachedBytes -= removed.sizeBytes;
+      }
       await _deleteBrowserCacheEntry(key);
     }
-    _persistIndex();
+    if (_totalCachedBytes < 0) _totalCachedBytes = 0;
+    _schedulePersistIndex(immediate: true);
     return keysToRemove.length;
   }
 
@@ -815,7 +876,8 @@ class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
       supportsConditionalHttpRevalidation: true,
       supportsNativeCryptoHash: true,
       supportsLowDiskSpaceNotifications: false,
-      storageMechanism: 'Browser CacheStorage API (window.caches) + Object URLs + localStorage Index',
+      storageMechanism:
+          'Browser CacheStorage API (window.caches) + Object URLs + Debounced localStorage Index',
       defaultCacheRootPath: 'CacheStorage://${_config.cacheSubdirectory}',
     );
   }

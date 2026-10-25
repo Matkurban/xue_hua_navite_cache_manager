@@ -19,7 +19,9 @@ import java.net.URI
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
 
@@ -27,8 +29,8 @@ import java.util.regex.Pattern
  * Native Android implementation of `xue_hua_navite_cache_manager`.
  *
  * Provides thread-safe network file downloading, conditional HTTP revalidation (ETag / Last-Modified),
- * MD5 and SHA-256 verification, atomic disk persistence under `context.cacheDir`, and
- * LRU / LFU / FIFO / TTL quota eviction.
+ * MD5 and SHA-256 verification, atomic disk persistence under `context.cacheDir`, O(1) running byte
+ * tracking, debounced asynchronous index flushing for 10,000+ entries, and throttled progress events.
  */
 class XueHuaNaviteCacheManagerPlugin :
     FlutterPlugin,
@@ -43,13 +45,15 @@ class XueHuaNaviteCacheManagerPlugin :
     private var eventSink: EventChannel.EventSink? = null
     private val indexLock = Any()
     private val executor = Executors.newCachedThreadPool()
+    private val persistScheduler = Executors.newSingleThreadScheduledExecutor()
+    private var pendingPersistFuture: ScheduledFuture<*>? = null
 
     // Configuration fields
     @Volatile
     private var maxDiskCacheBytes: Long = 500L * 1024L * 1024L
 
     @Volatile
-    private var maxEntries: Int = 2000
+    private var maxEntries: Int = 20000
 
     @Volatile
     private var defaultTtlSeconds: Long = 7L * 24L * 3600L
@@ -81,8 +85,9 @@ class XueHuaNaviteCacheManagerPlugin :
     @Volatile
     private var autoTrimOnWrite: Boolean = true
 
-    // Cache index and telemetry counters
-    private val entries = LinkedHashMap<String, CacheRecord>()
+    // Cache index and O(1) telemetry counters
+    private val entries = LinkedHashMap<String, CacheRecord>(256, 0.75f, false)
+    private var totalCachedBytes: Long = 0L
     private var hitCount: Long = 0L
     private var missCount: Long = 0L
     private var evictionCount: Long = 0L
@@ -109,7 +114,7 @@ class XueHuaNaviteCacheManagerPlugin :
         var pinned: Boolean
     ) {
         fun isExpired(nowMs: Long = System.currentTimeMillis()): Boolean {
-            return expiresAtMs in 1..<nowMs
+            return expiresAtMs > 0L && nowMs > expiresAtMs
         }
 
         fun toMap(): Map<String, Any?> {
@@ -195,6 +200,7 @@ class XueHuaNaviteCacheManagerPlugin :
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        flushIndexNow()
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
     }
@@ -247,6 +253,7 @@ class XueHuaNaviteCacheManagerPlugin :
             if (indexLoaded) return
             indexLoaded = true
             entries.clear()
+            totalCachedBytes = 0L
             val indexFile = getIndexFile()
             if (!indexFile.exists()) return
             try {
@@ -262,6 +269,7 @@ class XueHuaNaviteCacheManagerPlugin :
                     val f = File(record.filePath)
                     if (record.key.isNotEmpty() && f.exists()) {
                         entries[record.key] = record
+                        totalCachedBytes += record.sizeBytes
                     }
                 }
             } catch (_: Exception) {
@@ -270,18 +278,46 @@ class XueHuaNaviteCacheManagerPlugin :
         }
     }
 
-    private fun persistIndexLocked() {
+    /**
+     * Schedules a debounced background flush of the in-memory index so 10,000+ rapid
+     * cache operations coalesce into a single non-blocking disk write.
+     */
+    private fun schedulePersistIndexLocked(immediate: Boolean = false) {
+        pendingPersistFuture?.cancel(false)
+        if (immediate) {
+            persistScheduler.execute { flushIndexNow() }
+        } else {
+            pendingPersistFuture = persistScheduler.schedule(
+                { flushIndexNow() },
+                600L,
+                TimeUnit.MILLISECONDS
+            )
+        }
+    }
+
+    private fun flushIndexNow() {
+        val snapshotEntries: List<CacheRecord>
+        val snapshotHit: Long
+        val snapshotMiss: Long
+        val snapshotEviction: Long
+        val indexFile: File
+        synchronized(indexLock) {
+            snapshotEntries = entries.values.map { it.copy() }
+            snapshotHit = hitCount
+            snapshotMiss = missCount
+            snapshotEviction = evictionCount
+            indexFile = getIndexFile()
+        }
         try {
             val root = JSONObject()
-            root.put("hitCount", hitCount)
-            root.put("missCount", missCount)
-            root.put("evictionCount", evictionCount)
+            root.put("hitCount", snapshotHit)
+            root.put("missCount", snapshotMiss)
+            root.put("evictionCount", snapshotEviction)
             val arr = JSONArray()
-            for (record in entries.values) {
+            for (record in snapshotEntries) {
                 arr.put(record.toJson())
             }
             root.put("entries", arr)
-            val indexFile = getIndexFile()
             val tmpFile = File(indexFile.parentFile, "cache_index_v1.json.tmp")
             tmpFile.writeText(root.toString(), Charsets.UTF_8)
             if (!tmpFile.renameTo(indexFile)) {
@@ -414,6 +450,7 @@ class XueHuaNaviteCacheManagerPlugin :
         }
 
         if (prevSubdir != cacheSubdirectory) {
+            flushIndexNow()
             synchronized(indexLock) {
                 indexLoaded = false
             }
@@ -422,8 +459,8 @@ class XueHuaNaviteCacheManagerPlugin :
 
         if (autoTrimOnWrite) {
             synchronized(indexLock) {
-                enforceQuotaLocked(maxDiskCacheBytes, null)
-                persistIndexLocked()
+                enforceQuotaLocked(maxDiskCacheBytes, null, checkOnlyFastPath = false)
+                schedulePersistIndexLocked()
             }
         }
         result.success(null)
@@ -482,7 +519,7 @@ class XueHuaNaviteCacheManagerPlugin :
                     if (tag != null) found.tag = tag
                     if (pinned) found.pinned = true
                     hitCount += 1L
-                    persistIndexLocked()
+                    schedulePersistIndexLocked()
                     emitProgress(
                         key,
                         url,
@@ -556,7 +593,7 @@ class XueHuaNaviteCacheManagerPlugin :
                     if (tag != null) existing.tag = tag
                     if (pinned) existing.pinned = true
                     entries[key] = existing
-                    persistIndexLocked()
+                    schedulePersistIndexLocked()
                 }
                 emitProgress(
                     key,
@@ -586,6 +623,7 @@ class XueHuaNaviteCacheManagerPlugin :
             tempFile = workingTempFile
 
             var bytesReceived = 0L
+            var lastProgressEmitMs = 0L
             conn.inputStream.use { input ->
                 FileOutputStream(workingTempFile).use { output ->
                     val buffer = ByteArray(16 * 1024)
@@ -596,7 +634,11 @@ class XueHuaNaviteCacheManagerPlugin :
                         }
                         output.write(buffer, 0, read)
                         bytesReceived += read
-                        emitProgress(key, url, "inProgress", bytesReceived, totalBytes)
+                        val nowMs = System.currentTimeMillis()
+                        if (nowMs - lastProgressEmitMs >= 50L || bytesReceived == totalBytes) {
+                            lastProgressEmitMs = nowMs
+                            emitProgress(key, url, "inProgress", bytesReceived, totalBytes)
+                        }
                         read = input.read(buffer)
                     }
                     output.flush()
@@ -649,14 +691,18 @@ class XueHuaNaviteCacheManagerPlugin :
 
             synchronized(indexLock) {
                 val old = entries[key]
-                if (old != null && old.filePath != finalFile.absolutePath) {
-                    File(old.filePath).delete()
+                if (old != null) {
+                    totalCachedBytes -= old.sizeBytes
+                    if (old.filePath != finalFile.absolutePath) {
+                        File(old.filePath).delete()
+                    }
                 }
                 entries[key] = record
+                totalCachedBytes += record.sizeBytes
                 if (autoTrimOnWrite) {
-                    enforceQuotaLocked(maxDiskCacheBytes, key)
+                    enforceQuotaLocked(maxDiskCacheBytes, key, checkOnlyFastPath = true)
                 }
-                persistIndexLocked()
+                schedulePersistIndexLocked()
             }
 
             emitProgress(key, url, "completed", record.sizeBytes, record.sizeBytes, record.filePath)
@@ -746,8 +792,9 @@ class XueHuaNaviteCacheManagerPlugin :
             val file = File(record.filePath)
             if (!file.exists()) {
                 entries.remove(key)
+                totalCachedBytes = (totalCachedBytes - record.sizeBytes).coerceAtLeast(0L)
                 missCount += 1L
-                persistIndexLocked()
+                schedulePersistIndexLocked()
                 result.success(null)
                 return
             }
@@ -759,7 +806,7 @@ class XueHuaNaviteCacheManagerPlugin :
             record.lastAccessedAtMs = System.currentTimeMillis()
             record.hitCount += 1L
             hitCount += 1L
-            persistIndexLocked()
+            schedulePersistIndexLocked()
             result.success(record.toMap())
         }
     }
@@ -779,7 +826,7 @@ class XueHuaNaviteCacheManagerPlugin :
                     record.lastAccessedAtMs = System.currentTimeMillis()
                     record.hitCount += 1L
                     hitCount += 1L
-                    persistIndexLocked()
+                    schedulePersistIndexLocked()
                     resolvedFilePath = record.filePath
                 }
             } else {
@@ -860,11 +907,16 @@ class XueHuaNaviteCacheManagerPlugin :
                 pinned = pinned
             )
             synchronized(indexLock) {
-                entries[key] = record
-                if (autoTrimOnWrite) {
-                    enforceQuotaLocked(maxDiskCacheBytes, key)
+                val previous = entries[key]
+                if (previous != null) {
+                    totalCachedBytes -= previous.sizeBytes
                 }
-                persistIndexLocked()
+                entries[key] = record
+                totalCachedBytes += record.sizeBytes
+                if (autoTrimOnWrite) {
+                    enforceQuotaLocked(maxDiskCacheBytes, key, checkOnlyFastPath = true)
+                }
+                schedulePersistIndexLocked()
             }
             mainHandler.post { result.success(record.toMap()) }
         } catch (e: Exception) {
@@ -920,11 +972,16 @@ class XueHuaNaviteCacheManagerPlugin :
                 pinned = pinned
             )
             synchronized(indexLock) {
-                entries[key] = record
-                if (autoTrimOnWrite) {
-                    enforceQuotaLocked(maxDiskCacheBytes, key)
+                val previous = entries[key]
+                if (previous != null) {
+                    totalCachedBytes -= previous.sizeBytes
                 }
-                persistIndexLocked()
+                entries[key] = record
+                totalCachedBytes += record.sizeBytes
+                if (autoTrimOnWrite) {
+                    enforceQuotaLocked(maxDiskCacheBytes, key, checkOnlyFastPath = true)
+                }
+                schedulePersistIndexLocked()
             }
             mainHandler.post { result.success(record.toMap()) }
         } catch (e: Exception) {
@@ -945,7 +1002,7 @@ class XueHuaNaviteCacheManagerPlugin :
                 return
             }
             record.pinned = pinned
-            persistIndexLocked()
+            schedulePersistIndexLocked()
             result.success(true)
         }
     }
@@ -961,8 +1018,9 @@ class XueHuaNaviteCacheManagerPlugin :
                 result.success(false)
                 return
             }
+            totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
             File(removed.filePath).delete()
-            persistIndexLocked()
+            schedulePersistIndexLocked()
             result.success(true)
         }
     }
@@ -975,11 +1033,12 @@ class XueHuaNaviteCacheManagerPlugin :
             for (k in keys) {
                 val removed = entries.remove(k)
                 if (removed != null) {
+                    totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
                     File(removed.filePath).delete()
                 }
             }
             if (keys.isNotEmpty()) {
-                persistIndexLocked()
+                schedulePersistIndexLocked()
             }
             result.success(keys.size)
         }
@@ -989,7 +1048,7 @@ class XueHuaNaviteCacheManagerPlugin :
         synchronized(indexLock) {
             val count = removeExpiredLocked()
             if (count > 0) {
-                persistIndexLocked()
+                schedulePersistIndexLocked()
             }
             result.success(count)
         }
@@ -1001,6 +1060,7 @@ class XueHuaNaviteCacheManagerPlugin :
         for (k in expiredKeys) {
             val removed = entries.remove(k)
             if (removed != null) {
+                totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
                 File(removed.filePath).delete()
             }
         }
@@ -1012,22 +1072,29 @@ class XueHuaNaviteCacheManagerPlugin :
         val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
         val targetMax = (args["maxBytes"] as? Number)?.toLong() ?: maxDiskCacheBytes
         synchronized(indexLock) {
-            val evicted = enforceQuotaLocked(targetMax, null)
+            val evicted = enforceQuotaLocked(targetMax, null, checkOnlyFastPath = false)
             if (evicted > 0) {
-                persistIndexLocked()
+                schedulePersistIndexLocked()
             }
             result.success(evicted)
         }
     }
 
-    private fun enforceQuotaLocked(targetMaxBytes: Long, protectedKey: String?): Int {
+    private fun enforceQuotaLocked(
+        targetMaxBytes: Long,
+        protectedKey: String?,
+        checkOnlyFastPath: Boolean
+    ): Int {
+        if (checkOnlyFastPath && totalCachedBytes <= targetMaxBytes && entries.size <= maxEntries) {
+            return 0
+        }
+
         var evicted = removeExpiredLocked()
         if (evictionPolicy == "ttlOnly") {
             return evicted
         }
 
-        var totalBytes = entries.values.sumOf { it.sizeBytes }
-        if (totalBytes <= targetMaxBytes && entries.size <= maxEntries) {
+        if (totalCachedBytes <= targetMaxBytes && entries.size <= maxEntries) {
             return evicted
         }
 
@@ -1045,13 +1112,13 @@ class XueHuaNaviteCacheManagerPlugin :
             }
 
         for ((candidateKey) in candidates) {
-            if (totalBytes <= targetMaxBytes && entries.size <= maxEntries) {
+            if (totalCachedBytes <= targetMaxBytes && entries.size <= maxEntries) {
                 break
             }
             val removed = entries.remove(candidateKey)
             if (removed != null) {
                 File(removed.filePath).delete()
-                totalBytes -= removed.sizeBytes
+                totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
                 evicted += 1
                 evictionCount += 1L
             }
@@ -1067,10 +1134,11 @@ class XueHuaNaviteCacheManagerPlugin :
             for (k in keys) {
                 val removed = entries.remove(k)
                 if (removed != null) {
+                    totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
                     File(removed.filePath).delete()
                 }
             }
-            persistIndexLocked()
+            schedulePersistIndexLocked(immediate = true)
             result.success(keys.size)
         }
     }
@@ -1105,6 +1173,7 @@ class XueHuaNaviteCacheManagerPlugin :
                 val tagKey = if (record.tag.isNullOrBlank()) "untagged" else record.tag!!
                 bytesByTag[tagKey] = (bytesByTag[tagKey] ?: 0L) + record.sizeBytes
             }
+            totalCachedBytes = totalBytes
 
             val stats = mapOf<String, Any?>(
                 "totalEntries" to entries.size,
@@ -1129,7 +1198,7 @@ class XueHuaNaviteCacheManagerPlugin :
             "supportsConditionalHttpRevalidation" to true,
             "supportsNativeCryptoHash" to true,
             "supportsLowDiskSpaceNotifications" to true,
-            "storageMechanism" to "Context.getCacheDir() + HttpURLConnection + MessageDigest",
+            "storageMechanism" to "Context.getCacheDir() + HttpURLConnection + Debounced Index",
             "defaultCacheRootPath" to getCacheRootDir().absolutePath
         )
         result.success(caps)

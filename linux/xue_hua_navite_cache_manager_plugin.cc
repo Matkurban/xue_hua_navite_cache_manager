@@ -187,7 +187,7 @@ namespace {
 
 std::mutex g_mutex;
 int64_t g_max_disk_cache_bytes = 500LL * 1024LL * 1024LL;
-int g_max_entries = 2000;
+int g_max_entries = 20000;
 int64_t g_default_ttl_seconds = 7LL * 24LL * 3600LL;
 std::string g_eviction_policy = "lru";
 std::string g_cache_subdirectory = "xue_hua_network_cache";

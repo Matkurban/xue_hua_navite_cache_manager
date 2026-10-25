@@ -2,23 +2,27 @@
 
 [English](./README.md) | 简体中文
 
-一款面向生产环境的 Flutter 全平台原生网络文件缓存管理插件，完整支持 **Android**、**iOS**、**macOS**、**Windows**、**Linux** 与 **Web** 六大平台。
+一款面向生产环境的 Flutter 全平台原生网络文件缓存管理与零卡顿图片缓存插件，完整支持 **Android**、**iOS**、**macOS**、**Windows**、**Linux** 与 **Web** 六大平台。
 
-`xue_hua_navite_cache_manager` 提供自动化的 HTTP/HTTPS 网络文件下载缓存、HTTP 条件协商重验证（`ETag` / `Last-Modified` / `304 Not Modified`）、`Cache-Control: max-age` 解析、可配置的磁盘配额淘汰策略（`LRU`、`LFU`、`FIFO`、`TTL-only`）、原生 `MD5` 与 `SHA-256` 完整性校验、按分类标签（Tag）批量清理、重要条目置顶保护（Pinned）以及实时下载进度流监听。
+`xue_hua_navite_cache_manager` 内置高性能 `CachedNetworkImage` 组件与 `CachedNetworkImageProvider`（支持 60/120 FPS 丝滑列表滚动、零拷贝引擎解码与 C++ 解码器按尺寸降采样），同时提供自动化的 HTTP/HTTPS 网络文件下载缓存、HTTP 条件协商重验证（`ETag` / `Last-Modified` / `304 Not Modified`）、`Cache-Control: max-age` 解析、支持 **10,000+ 级海量条目** 的可配置磁盘配额淘汰策略（`LRU`、`LFU`、`FIFO`、`TTL-only`）、原生 `MD5` 与 `SHA-256` 完整性校验、按分类标签（Tag）批量清理、重要条目置顶保护（Pinned）以及实时下载进度流监听。
 
 ## 核心特性
 
+- **零卡顿 `CachedNetworkImage` 与 `CachedNetworkImageProvider`**：
+  - **Flutter `ImageCache` 内存同步直出**：命中 Flutter 内存位图缓存时（`wasSynchronouslyLoaded == true`）自动跳过淡入动画，0ms 同步渲染，彻底杜绝列表上下滑动时的闪烁。
+  - **Engine IO 线程零字节拷贝解码**：在原生端通过 `ui.ImmutableBuffer.fromFilePath` 直接在引擎 IO 线程读取磁盘缓存并硬件解码，避免将数 MB 的图片字节数组通过 `MethodChannel` 拷贝回 Dart UI 线程。
+  - **C++ 解码器按尺寸降采样（`memCacheWidth` / `memCacheHeight`）**：支持在 C++ 解码阶段直接将 4K 大图降采样为目标缩略图尺寸，大幅降低 GPU 显存峰值与光栅化掉帧。
+- **支持 10,000+ 海量条目的高吞吐索引引擎**：
+  - 默认 `maxEntries = 20000`，采用 `O(1)` 内存哈希表 + 实时累加字节计数器（`totalCachedBytes`）+ **600ms 防抖异步后台刷盘（Debounced Async Flush）** + **50ms 进度流节流**，无需引入笨重的 SQLite FFI 动态库即可在六端实现万级条目的微秒级命中与非阻塞持久化。
 - **六端原生级底层实现**：
   - **Android**：基于 `HttpURLConnection` + `MessageDigest`（`MD5` / `SHA-256`）+ `Context.getCacheDir()` 临时文件原子重命名落盘。
   - **iOS**：基于 `URLSession` + Apple `CryptoKit` + `NSCachesDirectory`，自动设置 `NSURLIsExcludedFromBackupKey = true` 避免占用用户 iCloud 备份空间。
   - **macOS**：基于 `URLSession` + Apple `CryptoKit` + `~/Library/Caches/<BundleID>/`。
   - **Windows**：基于原生 `WinHTTP` + Windows `BCrypt`（`MD5` / `SHA-256`）+ `%LOCALAPPDATA%\Temp\`。
   - **Linux**：基于 GLib `GChecksum`（`MD5` / `SHA-256`）+ `XDG_CACHE_HOME` (`g_get_user_cache_dir()`) + `curl` 传输。
-  - **Web**：基于浏览器原生 `CacheStorage` API (`window.caches`) + `fetch()` (`AbortController`) + `Blob` Object URL + `localStorage` 元数据索引。
+  - **Web**：基于浏览器原生 `CacheStorage` API (`window.caches`) + `fetch()` (`AbortController`) + `Blob` Object URL + 防抖 `localStorage` 元数据索引。
 - **智能 HTTP 304 协商缓存**：自动保存响应头中的 `ETag` 与 `Last-Modified`，在过期或强制刷新时自动携带 `If-None-Match` 与 `If-Modified-Since`，若服务端返回 `304 Not Modified` 则直接续期本地文件，大幅节省带宽。
 - **离线容错回退（Stale Cache Fallback）**：开启 `fallbackToCacheOnError: true`（默认开启）时，若设备断网或远端服务器异常，会自动回退返回本地已缓存的历史文件。
-- **多种淘汰算法与置顶保护**：支持 `LRU`（最近最少使用）、`LFU`（最不经常使用）、`FIFO`（先进先出）和 `ttlOnly`（仅清理过期）四种淘汰策略，支持通过 `pinned: true` 锁定关键离线包防止被自动淘汰。
-- **原生哈希校验**：支持在文件落盘前校验 `MD5` 或 `SHA-256` 指纹，防止残损或被篡改的文件污染缓存。
 - **内置 AI 编码助手 Skill**：遵循 [Dart Package Skills](https://dart.dev/tools/pub/package-skills) 规范，在 `skills/xue-hua-navite-cache-manager/SKILL.md` 内置标准使用技能，支持通过 `dart run skills@ get` 一键安装。
 
 ## 环境与平台要求
@@ -40,7 +44,7 @@
 
 ```yaml
 dependencies:
-  xue_hua_navite_cache_manager: ^1.0.0
+  xue_hua_navite_cache_manager: ^1.1.0
 ```
 
 ### Android 配置
@@ -71,9 +75,45 @@ Web 端使用浏览器的 `fetch()` 与 `CacheStorage` 接口，跨域资源需�
 
 ## 快速上手
 
-### 1. 初始化全局缓存配置
+### 1. 缓存并显示网络图片（`CachedNetworkImage` 与 `CachedNetworkImageProvider`）
 
-建议在应用启动时调用 `configure` 配置最大磁盘配额、默认过期时间及淘汰策略：
+```dart
+import 'package:flutter/material.dart';
+import 'package:xue_hua_navite_cache_manager/xue_hua_navite_cache_manager.dart';
+
+// 1a. 使用 CachedNetworkImage 组件（支持降采样解码、实时进度条与错误占位）
+CachedNetworkImage(
+  imageUrl: 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+  tag: 'wildlife',
+  width: 200,
+  height: 200,
+  memCacheWidth: 400, // 在 C++ 解码层直接按 400px 宽度降采样，防止大图卡顿
+  fit: BoxFit.cover,
+  progressIndicatorBuilder: (context, url, progress) {
+    final double? ratio = progress?.expectedTotalBytes != null &&
+            progress!.expectedTotalBytes! > 0
+        ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
+        : null;
+    return Center(child: CircularProgressIndicator(value: ratio));
+  },
+  errorWidget: (context, url, error, stackTrace) =>
+      const Center(child: Icon(Icons.broken_image_outlined)),
+);
+
+// 1b. 将 CachedNetworkImageProvider 配合 CircleAvatar 或 DecorationImage 使用
+const CircleAvatar(
+  radius: 40,
+  backgroundImage: CachedNetworkImageProvider(
+    'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
+    tag: 'avatars',
+    maxWidth: 160,
+  ),
+);
+```
+
+### 2. 初始化全局缓存配置（原生支持 10,000+ 条目）
+
+建议在应用启动时调用 `configure` 配置最大磁盘配额、最大条目数、默认过期时间及淘汰策略：
 
 ```dart
 import 'package:xue_hua_navite_cache_manager/xue_hua_navite_cache_manager.dart';
@@ -83,8 +123,8 @@ final cache = XueHuaNaviteCacheManager.instance;
 Future<void> initCache() async {
   await cache.configure(
     const CacheManagerConfig(
-      maxDiskCacheBytes: 300 * 1024 * 1024, // 300 MB 磁盘上限
-      maxEntries: 1500,
+      maxDiskCacheBytes: 500 * 1024 * 1024, // 500 MB 磁盘上限
+      maxEntries: 20000, // 默认支持 20,000 条目，内置 O(1) 配额检测与防抖异步刷盘
       defaultTtlSeconds: 7 * 24 * 3600, // 默认缓存 7 天
       evictionPolicy: CacheEvictionPolicy.lru, // LRU 淘汰策略
       cacheSubdirectory: 'app_media_cache',
@@ -92,7 +132,7 @@ Future<void> initCache() async {
       connectTimeoutMs: 15000,
       readTimeoutMs: 30000,
       defaultHeaders: <String, String>{
-        'User-Agent': 'MyFlutterApp/1.0.0',
+        'User-Agent': 'MyFlutterApp/1.1.0',
       },
       respectHttpCacheHeaders: true,
       autoTrimOnWrite: true,
@@ -101,7 +141,7 @@ Future<void> initCache() async {
 }
 ```
 
-### 2. 下载并缓存网络文件
+### 3. 下载并缓存任意网络文件
 
 使用 `downloadFile` 可获取包含命中来源（`cacheHit`、`revalidated`、`networkDownload`、`staleCacheFallback`）与 HTTP 状态码的完整结果：
 
@@ -129,7 +169,7 @@ final entry = await cache.getSingleFile(
 );
 ```
 
-### 3. 监听实时下载进度
+### 4. 监听实时下载进度
 
 ```dart
 final subscription = cache
@@ -143,7 +183,7 @@ final subscription = cache
 // await subscription.cancel();
 ```
 
-### 4. 批量预取与纯离线查询
+### 5. 批量预取与纯离线查询
 
 ```dart
 // 批量预加载网络资源
@@ -168,7 +208,7 @@ final bytes = await cache.readCacheBytes(
 );
 ```
 
-### 5. 手动写入缓存（`putBytes` / `putFile`）与按需清理
+### 6. 手动写入缓存（`putBytes` / `putFile`）与按需清理
 
 ```dart
 import 'dart:typed_data';
@@ -190,7 +230,7 @@ await cache.trimToSize(50 * 1024 * 1024); // 裁剪至 50 MB 以内
 await cache.clearAll(includePinned: false); // 清空非置顶缓存，保留置顶文件
 ```
 
-### 6. 获取缓存统计与平台能力信息
+### 7. 获取缓存统计与平台能力信息
 
 ```dart
 final stats = await cache.getStats();
@@ -202,12 +242,14 @@ print('当前平台: ${capabilities.platformName}, 存储引擎: ${capabilities.
 
 ## 注意事项与避坑指南
 
-1. **Web 端与原生端路径差异**：
+1. **高清大图防卡顿指南（`memCacheWidth` / `memCacheHeight`）**：
+   - 在 `ListView` 或 `GridView` 中展示网络图片时，请务必根据显示框像素大小传入 `memCacheWidth` 或 `memCacheHeight`，让 Flutter 引擎 C++ 解码器在解码阶段直接降采样，避免 4K 原图撑爆显存导致滚动掉帧。
+2. **Web 端与原生端路径差异**：
    - 在 Android、iOS、macOS、Windows 和 Linux 上（`capabilities.supportsFileSystemPaths == true`），`entry.filePath` 是真实的操作系统的本地绝对路径，可直接传给 `File(entry.filePath)`。
-   - 在 Web 端（`capabilities.supportsFileSystemPaths == false`），由于浏览器沙盒限制，`entry.filePath` 是 `Blob` URL 或 `CacheStorage` 虚拟 URI。如果需要跨六端统一读取字节数据，请优先使用 `cache.readCacheBytes(keyOrUrl)`。
-2. **置顶条目保护（Pinned）**：
+   - 在 Web 端（`capabilities.supportsFileSystemPaths == false`），由于浏览器沙盒限制，`entry.filePath` 是 `Blob` URL 或 `CacheStorage` 虚拟 URI。如果需要跨六端统一显示图片或读取字节数据，请优先使用 `CachedNetworkImage` 或 `cache.readCacheBytes(keyOrUrl)`。
+3. **置顶条目保护（Pinned）**：
    - 设置了 `pinned: true`（或调用 `setPinned(key, pinned: true)`）的条目不会在 `LRU`/`LFU`/`FIFO` 自动配额裁剪或 `removeExpired()` 时被删除。若需在清理缓存时保留置顶文件，请调用 `clearAll(includePinned: false)`。
-3. **AI 编码技能（Package Skills）**：
+4. **AI 编码技能（Package Skills）**：
    - 依赖本插件的项目可执行 `dart run skills@ get` 自动安装随包发布的 AI 辅助编程指南。
 
 ## 作者与仓库信息

@@ -5,7 +5,7 @@ class CacheManagerConfig {
   /// Creates a [CacheManagerConfig].
   const CacheManagerConfig({
     this.maxDiskCacheBytes = 500 * 1024 * 1024, // 500 MB default
-    this.maxEntries = 2000,
+    this.maxEntries = 20000, // Supports 10,000+ entries out of the box
     this.defaultTtlSeconds = 7 * 24 * 3600, // 7 days default
     this.evictionPolicy = CacheEvictionPolicy.lru,
     this.cacheSubdirectory = 'xue_hua_network_cache',
@@ -28,7 +28,7 @@ class CacheManagerConfig {
   final int maxDiskCacheBytes;
 
   /// Maximum number of cached file entries before eviction is triggered.
-  /// Defaults to `2000`.
+  /// Defaults to `20000` to seamlessly support 10,000+ cached entries.
   final int maxEntries;
 
   /// Default Time-To-Live (TTL) in seconds when a request does not specify a custom `ttl`

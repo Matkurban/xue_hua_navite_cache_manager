@@ -5,6 +5,8 @@ import 'src/cache_models.dart';
 import 'xue_hua_navite_cache_manager_platform_interface.dart';
 
 export 'src/cache_models.dart';
+export 'src/widgets/cached_network_image.dart';
+export 'src/widgets/cached_network_image_provider.dart';
 
 /// Cross-platform native network file cache manager for Flutter across
 /// Android, iOS, macOS, Windows, Linux, and Web.

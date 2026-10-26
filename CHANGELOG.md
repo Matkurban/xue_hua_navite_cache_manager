@@ -1,3 +1,9 @@
+## 1.1.3
+
+* Corrected the example integration test checksum expectation for the loopback payload.
+* Added an example flutter_driver UI harness under `example/test_driver/`.
+* Fixed Linux conditional HTTP revalidation. Downloads now store `ETag` and `Last-Modified`, and an HTTP `304 Not Modified` response is reported as `revalidated` instead of another `networkDownload`.
+
 ## 1.1.2
 
 * Shortened the pubspec `description` so it meets pub.dev's 60–180 character guidance and search engines can show the full text.

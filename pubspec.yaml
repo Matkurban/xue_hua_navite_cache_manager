@@ -1,6 +1,6 @@
 name: xue_hua_navite_cache_manager
 description: "Flutter native network file cache with CachedNetworkImage, HTTP 304 revalidation, LRU/LFU/FIFO/TTL eviction, MD5/SHA-256 checksums, and progress."
-version: 1.1.2
+version: 1.1.3
 homepage: https://github.com/Matkurban/xue_hua_navite_cache_manager
 repository: https://github.com/Matkurban/xue_hua_navite_cache_manager
 issue_tracker: https://github.com/Matkurban/xue_hua_navite_cache_manager/issues

@@ -3,6 +3,10 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+// Hash helper is not on the public barrel. The digest is derived from the
+// payload bytes, then checked against the known SHA-256 so it cannot drift.
+// ignore: implementation_imports
+import 'package:xue_hua_navite_cache_manager/src/cache_hash_utils.dart';
 import 'package:xue_hua_navite_cache_manager/xue_hua_navite_cache_manager.dart';
 
 void main() {
@@ -89,9 +93,13 @@ void main() {
         final serverBody = Uint8List.fromList(
           'Native Cache Manager Loopback Payload'.codeUnits,
         );
-        // SHA-256 of "Native Cache Manager Loopback Payload"
-        const expectedSha256 =
-            'c648e91a5ea2f684e5e68b2e33ca4739f7e5820263b818c3734d72808b473909';
+        // SHA-256 of the ASCII payload above (OpenSSL / hashlib).
+        // The previous constant did not hash this string.
+        final expectedSha256 = CacheHashUtils.sha256Hex(serverBody);
+        expect(
+          expectedSha256,
+          'bd2708ce19a7937efd2adf4b93e336d9303166a4d3f1610705dcccfce7916bc4',
+        );
 
         server.listen((HttpRequest req) async {
           requestCount++;

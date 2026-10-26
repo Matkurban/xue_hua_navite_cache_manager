@@ -1,3 +1,8 @@
+## 1.1.3
+
+* Corrected the example integration test checksum expectation for the loopback payload.
+* Added an example flutter_driver UI harness under `example/test_driver/`.
+
 ## 1.1.2
 
 * Shortened the pubspec `description` so it meets pub.dev's 60–180 character guidance and search engines can show the full text.

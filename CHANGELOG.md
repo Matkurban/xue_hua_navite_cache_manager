@@ -1,3 +1,10 @@
+## 1.1.5
+
+* Fixed Darwin `flutter_driver` stalls after the example gallery scrolls. `flutter_driver` `waitFor` does not search until `transientCallbackCount` is 0. The gallery's indeterminate `CircularProgressIndicator` (no `Content-Length` yet) and the status banner's indeterminate `LinearProgressIndicator` (latest event `started` / `failed` / `canceled`) never stop ticking, so every later `tapText` hit the 20s command timeout while the isolate itself stayed alive. Loading placeholders are now static unless byte progress is known, and the banner never passes a null progress value.
+* Fixed iOS `URLSession` startup. The session was first created on a GCD worker inside `downloadFile`; CFNetwork can abort the process from that thread, which matches the simulator fetch dying before `Last Fetch Result` and the Dart VM restarting. The session is now created on the main thread, with `waitsForConnectivity = false`, explicit request/resource timeouts, and a background delegate queue.
+* Darwin downloads stream to disk with `URLSessionDownloadTask` instead of buffering the whole body in a `dataTask`. Progress events are throttled to 50ms and include the expected byte count. A watchdog cancels a task that never completes and releases its download permit exactly once. Nil fields are omitted from event and download payloads so the iOS codec does not see `NSNull`.
+* iOS index load now recovers orphaned cache files when `cache_index_v1.json` is missing, matching macOS, and ignores in-flight `.partial` downloads.
+
 ## 1.1.4
 
 * Fixed Windows platform-thread delivery for the event channel and download method results. `EventSink` and `MethodResult` are no longer invoked from WinHTTP worker threads. Flutter 3.50 and newer SDKs use `PluginRegistrarWindows::PostPlatformThreadTask` when that API is present; earlier 3.47+ SDKs post to a message-only window created on the platform thread, which is the thread the engine requires.

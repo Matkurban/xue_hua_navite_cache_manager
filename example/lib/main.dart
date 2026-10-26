@@ -77,6 +77,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   bool _isBusy = false;
 
   StreamSubscription<CacheProgressEvent>? _progressSub;
+  DateTime _lastProgressUi = DateTime.fromMillisecondsSinceEpoch(0);
 
   static const List<Map<String, String>> _sampleUrls = <Map<String, String>>[
     <String, String>{
@@ -133,6 +134,17 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
     super.initState();
     _progressSub = _cache.progressStream.listen((event) {
       if (!mounted) return;
+      final bool terminal =
+          event.state == CacheTransferState.completed ||
+          event.state == CacheTransferState.failed ||
+          event.state == CacheTransferState.canceled ||
+          event.state == CacheTransferState.cacheHit;
+      final DateTime now = DateTime.now();
+      if (!terminal &&
+          now.difference(_lastProgressUi) < const Duration(milliseconds: 50)) {
+        return;
+      }
+      _lastProgressUi = now;
       setState(() {
         _latestProgress = event;
       });
@@ -518,7 +530,11 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                   ),
                 ),
                 Expanded(
-                  child: LinearProgressIndicator(value: progress.progress),
+                  // A null value is an indeterminate ticker. flutter_driver
+                  // waitFor blocks until transientCallbackCount hits 0, so a
+                  // bar left on `started` / `failed` (unknown total) freezes
+                  // every later finder for the rest of the process.
+                  child: LinearProgressIndicator(value: progress.progress ?? 0),
                 ),
                 const SizedBox(width: 8),
                 Text(
@@ -853,12 +869,28 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                               )
                             : null,
                         progressIndicatorBuilder: (context, url, progress) {
-                          final double? ratio =
-                              progress?.expectedTotalBytes != null &&
-                                  progress!.expectedTotalBytes! > 0
-                              ? progress.cumulativeBytesLoaded /
-                                    progress.expectedTotalBytes!
-                              : null;
+                          final int? total = progress?.expectedTotalBytes;
+                          double? ratio;
+                          if (progress != null && total != null && total > 0) {
+                            final double raw =
+                                progress.cumulativeBytesLoaded / total;
+                            if (raw < 0) {
+                              ratio = 0;
+                            } else if (raw > 1) {
+                              ratio = 1;
+                            } else {
+                              ratio = raw;
+                            }
+                          }
+                          // Unknown totals stay on a static icon. An
+                          // indeterminate CircularProgressIndicator never
+                          // stops ticking, and flutter_driver will not tap
+                          // another control until those tickers finish.
+                          if (ratio == null) {
+                            return const Center(
+                              child: Icon(Icons.image_outlined, size: 28),
+                            );
+                          }
                           return Center(
                             child: SizedBox(
                               width: 28,

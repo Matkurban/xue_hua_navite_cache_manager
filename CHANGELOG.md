@@ -1,3 +1,7 @@
+## 1.1.8
+
+* Fixed iOS compilation. The `main.async` closure that starts the first download used optional chaining (`self?.resumeDownloadTask`), so its type was `() -> ()?` and `DispatchQueue.async(execute:)` selected the `DispatchWorkItem` overload. The hop is now a `Void` closure. The 1.1.7 download-completion behavior is unchanged. 1.1.7 was not published.
+
 ## 1.1.7
 
 * Fixed iOS simulator `downloadFile` never completing. Delegate-based `URLSessionDownloadTask` did not deliver `didCompleteWithError` on the simulator (macOS on the same commit did), and the watchdog called `task.cancel()` before scheduling its fallback, so a stuck session queue swallowed the timeout. iOS now uses a completion-handler download task, creates the first `URLSession` on the main thread without `DispatchQueue.main.sync`, and on the simulator uses an ephemeral session with HTTP/3 disabled so the request is not stuck in the simulator HTTP stack. 1.1.6 was not published.

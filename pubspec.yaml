@@ -1,6 +1,6 @@
 name: xue_hua_navite_cache_manager
 description: "Flutter native network file cache with CachedNetworkImage, HTTP 304 revalidation, LRU/LFU/FIFO/TTL eviction, MD5/SHA-256 checksums, and progress."
-version: 1.1.3
+version: 1.1.4
 homepage: https://github.com/Matkurban/xue_hua_navite_cache_manager
 repository: https://github.com/Matkurban/xue_hua_navite_cache_manager
 issue_tracker: https://github.com/Matkurban/xue_hua_navite_cache_manager/issues
@@ -21,6 +21,10 @@ dependencies:
     sdk: flutter
   flutter_web_plugins:
     sdk: flutter
+  # Standalone Material library. package:flutter/material.dart is deprecated
+  # as of Flutter 3.47. ^1.0.0 keeps that minimum SDK resolvable; apps on a
+  # newer material_ui (the example uses ^1.8.0) still solve inside 1.x.
+  material_ui: ^1.0.0
   web: ^1.1.2
   plugin_platform_interface: ^2.1.8
 

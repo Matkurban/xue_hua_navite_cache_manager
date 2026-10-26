@@ -27,6 +27,47 @@ namespace xue_hua_navite_cache_manager {
 
 namespace {
 
+// Private message for the platform-thread dispatcher window. The Flutter
+// runner pumps every HWND on the platform thread (GetMessage hwnd == nullptr),
+// which is the thread shell.cc checks before an EventChannel send.
+constexpr UINT kPlatformTaskMessage = WM_APP + 0x351;
+
+// 600ms matches the index-flush contract documented for the 10k entry engine.
+constexpr int64_t kIndexFlushDebounceMs = 600;
+
+// Uses PluginRegistrarWindows::PostPlatformThreadTask when this Flutter SDK
+// exposes it (master after 2026-10-22). Flutter 3.47 through 3.50.0-0.2.pre
+// do not, and the trailing-return SFINAE falls through to the message window.
+template <typename Registrar>
+auto PostWithRegistrar(Registrar* registrar, std::function<void()>& task, int)
+    -> decltype(registrar->PostPlatformThreadTask(task), bool()) {
+  registrar->PostPlatformThreadTask(std::move(task));
+  return true;
+}
+
+template <typename Registrar>
+bool PostWithRegistrar(Registrar*, std::function<void()>&, long) {
+  return false;
+}
+
+LRESULT CALLBACK PlatformThreadWndProc(HWND hwnd,
+                                       UINT message,
+                                       WPARAM wparam,
+                                       LPARAM lparam) {
+  if (message == kPlatformTaskMessage) {
+    std::unique_ptr<std::function<void()>> task(
+        reinterpret_cast<std::function<void()>*>(lparam));
+    if (task && *task) {
+      try {
+        (*task)();
+      } catch (...) {
+      }
+    }
+    return 0;
+  }
+  return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
 int64_t CurrentTimeMs() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::system_clock::now().time_since_epoch())
@@ -221,7 +262,7 @@ void XueHuaNaviteCacheManagerPlugin::RegisterWithRegistrar(
           registrar->messenger(), "xue_hua_navite_cache_manager/events",
           &flutter::StandardMethodCodec::GetInstance());
 
-  auto plugin = std::make_unique<XueHuaNaviteCacheManagerPlugin>();
+  auto plugin = std::make_unique<XueHuaNaviteCacheManagerPlugin>(registrar);
   auto* plugin_pointer = plugin.get();
 
   method_channel->SetMethodCallHandler(
@@ -248,7 +289,18 @@ void XueHuaNaviteCacheManagerPlugin::RegisterWithRegistrar(
   registrar->AddPlugin(std::move(plugin));
 }
 
-XueHuaNaviteCacheManagerPlugin::XueHuaNaviteCacheManagerPlugin() {
+struct XueHuaNaviteCacheManagerPlugin::EventDispatchState {
+  std::mutex mu;
+  bool alive = true;
+  std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> sink;
+};
+
+XueHuaNaviteCacheManagerPlugin::XueHuaNaviteCacheManagerPlugin(
+    flutter::PluginRegistrarWindows* registrar)
+    : registrar_(registrar),
+      event_state_(std::make_shared<EventDispatchState>()) {
+  StartPlatformDispatcher();
+  persist_thread_ = std::thread([this]() { IndexFlushLoop(); });
   EnsureDownloadWorkers(max_concurrent_downloads_);
 }
 
@@ -263,12 +315,191 @@ XueHuaNaviteCacheManagerPlugin::~XueHuaNaviteCacheManagerPlugin() {
       worker.join();
     }
   }
+  {
+    std::lock_guard<std::mutex> lock(persist_mutex_);
+    persist_stopping_ = true;
+    persist_scheduled_ = true;
+    persist_deadline_ = std::chrono::steady_clock::now();
+  }
+  persist_cv_.notify_all();
+  if (persist_thread_.joinable()) {
+    persist_thread_.join();
+  }
+  // Run callbacks already queued on the message window while the messenger
+  // still exists, then retire the sink. Tasks posted through the registrar
+  // capture their own EventDispatchState share and no-op once alive is false.
+  StopPlatformDispatcher();
+  if (auto dispatch = CopyEventState()) {
+    std::lock_guard<std::mutex> lock(dispatch->mu);
+    dispatch->alive = false;
+    dispatch->sink.reset();
+  }
+}
+
+std::shared_ptr<XueHuaNaviteCacheManagerPlugin::EventDispatchState>
+XueHuaNaviteCacheManagerPlugin::CopyEventState() const {
+  std::lock_guard<std::mutex> lock(event_state_mu_);
+  return event_state_;
+}
+
+void XueHuaNaviteCacheManagerPlugin::StartPlatformDispatcher() {
+  HINSTANCE instance = GetModuleHandleW(nullptr);
+  const wchar_t* class_name = L"XueHuaNaviteCacheManager.PlatformThread";
+  WNDCLASSW existing = {};
+  if (!GetClassInfoW(instance, class_name, &existing)) {
+    WNDCLASSW window_class = {};
+    window_class.lpfnWndProc = PlatformThreadWndProc;
+    window_class.hInstance = instance;
+    window_class.lpszClassName = class_name;
+    RegisterClassW(&window_class);
+  }
+  platform_hwnd_ = CreateWindowExW(0, class_name, L"", 0, 0, 0, 0, 0,
+                                   HWND_MESSAGE, nullptr, instance, nullptr);
+}
+
+void XueHuaNaviteCacheManagerPlugin::StopPlatformDispatcher() {
+  HWND hwnd = static_cast<HWND>(platform_hwnd_);
+  if (!hwnd) return;
+  MSG msg;
+  while (PeekMessageW(&msg, hwnd, kPlatformTaskMessage, kPlatformTaskMessage,
+                      PM_REMOVE)) {
+    std::unique_ptr<std::function<void()>> task(
+        reinterpret_cast<std::function<void()>*>(msg.lParam));
+    if (task && *task) {
+      try {
+        (*task)();
+      } catch (...) {
+      }
+    }
+  }
+  DestroyWindow(hwnd);
+  platform_hwnd_ = nullptr;
+}
+
+void XueHuaNaviteCacheManagerPlugin::PostToPlatformThread(
+    std::function<void()> task) {
+  if (!task) return;
+  // Official engine queue when the SDK has it. 3.50 beta does not, so the
+  // message-only window below is what actually fixes the driver failure.
+  if (registrar_ != nullptr && PostWithRegistrar(registrar_, task, 0)) {
+    return;
+  }
+  HWND hwnd = static_cast<HWND>(platform_hwnd_);
+  if (!hwnd) {
+    return;
+  }
+  auto* heap_task = new std::function<void()>(std::move(task));
+  if (!PostMessageW(hwnd, kPlatformTaskMessage, 0,
+                    reinterpret_cast<LPARAM>(heap_task))) {
+    delete heap_task;
+  }
+}
+
+void XueHuaNaviteCacheManagerPlugin::ScheduleIndexFlush() {
+  index_dirty_.store(true, std::memory_order_release);
+  {
+    std::lock_guard<std::mutex> lock(persist_mutex_);
+    persist_deadline_ = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(kIndexFlushDebounceMs);
+    persist_scheduled_ = true;
+  }
+  persist_cv_.notify_one();
+}
+
+void XueHuaNaviteCacheManagerPlugin::IndexFlushLoop() {
+  const HRESULT com_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  const bool com_ready = SUCCEEDED(com_hr);
+  std::unique_lock<std::mutex> lock(persist_mutex_);
+  while (!persist_stopping_) {
+    if (!persist_scheduled_) {
+      persist_cv_.wait(lock, [this]() {
+        return persist_stopping_ || persist_scheduled_;
+      });
+      continue;
+    }
+    const auto deadline = persist_deadline_;
+    persist_cv_.wait_until(lock, deadline, [this, deadline]() {
+      return persist_stopping_ || persist_deadline_ != deadline;
+    });
+    if (persist_stopping_) break;
+    if (std::chrono::steady_clock::now() < persist_deadline_) {
+      continue;
+    }
+    persist_scheduled_ = false;
+    lock.unlock();
+    FlushIndexSnapshot();
+    lock.lock();
+  }
+  lock.unlock();
+  FlushIndexSnapshot();
+  if (com_ready) {
+    CoUninitialize();
+  }
+}
+
+void XueHuaNaviteCacheManagerPlugin::FlushIndexSnapshot() {
+  struct Snapshot {
+    std::string path;
+    int64_t hit = 0;
+    int64_t miss = 0;
+    int64_t eviction = 0;
+    std::vector<CacheRecord> entries;
+  } snap;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!index_dirty_.exchange(false, std::memory_order_acq_rel)) {
+      return;
+    }
+    snap.path = GetIndexFilePath();
+    snap.hit = hit_count_;
+    snap.miss = miss_count_;
+    snap.eviction = eviction_count_;
+    snap.entries.reserve(entries_.size());
+    for (const auto& kv : entries_) {
+      snap.entries.push_back(kv.second);
+    }
+  }
+  if (snap.path.empty()) {
+    index_dirty_.store(true, std::memory_order_release);
+    return;
+  }
+  const std::string tmp_path = snap.path + ".tmp";
+  bool wrote = false;
+  {
+    std::ofstream out(fs::u8path(tmp_path), std::ios::trunc);
+    if (out.is_open()) {
+      out << snap.hit << " " << snap.miss << " " << snap.eviction << "\n";
+      for (const auto& r : snap.entries) {
+        out << r.key << "\t" << r.url << "\t" << r.file_path << "\t"
+            << r.size_bytes << "\t" << r.created_at_ms << "\t"
+            << r.last_accessed_at_ms << "\t" << r.expires_at_ms << "\t"
+            << r.hit_count << "\t" << r.tag << "\t" << r.mime_type << "\t"
+            << r.etag << "\t" << r.last_modified << "\t" << r.checksum << "\t"
+            << r.checksum_algorithm << "\t" << (r.pinned ? "1" : "0") << "\n";
+      }
+      wrote = static_cast<bool>(out);
+    }
+  }
+  const std::wstring tmp_wide = Utf8ToWide(tmp_path);
+  if (!wrote) {
+    DeleteFileW(tmp_wide.c_str());
+    index_dirty_.store(true, std::memory_order_release);
+    return;
+  }
+  const std::wstring dest_wide = Utf8ToWide(snap.path);
+  if (!MoveFileExW(tmp_wide.c_str(), dest_wide.c_str(),
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    DeleteFileW(tmp_wide.c_str());
+    index_dirty_.store(true, std::memory_order_release);
+  }
 }
 
 void XueHuaNaviteCacheManagerPlugin::SetEventSink(
     std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> sink) {
-  std::lock_guard<std::mutex> lock(sink_mutex_);
-  event_sink_ = std::move(sink);
+  auto dispatch = CopyEventState();
+  if (!dispatch) return;
+  std::lock_guard<std::mutex> lock(dispatch->mu);
+  dispatch->sink = std::move(sink);
 }
 
 void XueHuaNaviteCacheManagerPlugin::EmitProgress(
@@ -279,8 +510,6 @@ void XueHuaNaviteCacheManagerPlugin::EmitProgress(
     int64_t total_bytes,
     const std::string& file_path,
     const std::string& error_message) {
-  std::lock_guard<std::mutex> lock(sink_mutex_);
-  if (!event_sink_) return;
   flutter::EncodableMap payload;
   payload[flutter::EncodableValue("key")] = flutter::EncodableValue(key);
   payload[flutter::EncodableValue("url")] = flutter::EncodableValue(url);
@@ -295,7 +524,13 @@ void XueHuaNaviteCacheManagerPlugin::EmitProgress(
   payload[flutter::EncodableValue("errorMessage")] =
       error_message.empty() ? flutter::EncodableValue()
                             : flutter::EncodableValue(error_message);
-  event_sink_->Success(flutter::EncodableValue(payload));
+  auto dispatch = CopyEventState();
+  PostToPlatformThread([dispatch, payload = std::move(payload)]() {
+    if (!dispatch) return;
+    std::lock_guard<std::mutex> lock(dispatch->mu);
+    if (!dispatch->alive || !dispatch->sink) return;
+    dispatch->sink->Success(flutter::EncodableValue(payload));
+  });
 }
 
 std::string XueHuaNaviteCacheManagerPlugin::GetCacheRootDir() const {
@@ -367,18 +602,10 @@ void XueHuaNaviteCacheManagerPlugin::EnsureIndexLoaded() {
 }
 
 void XueHuaNaviteCacheManagerPlugin::PersistIndexLocked() {
-  std::ofstream out(fs::u8path(GetIndexFilePath()), std::ios::trunc);
-  if (!out.is_open()) return;
-  out << hit_count_ << " " << miss_count_ << " " << eviction_count_ << "\n";
-  for (const auto& kv : entries_) {
-    const auto& r = kv.second;
-    out << r.key << "\t" << r.url << "\t" << r.file_path << "\t" << r.size_bytes
-        << "\t" << r.created_at_ms << "\t" << r.last_accessed_at_ms << "\t"
-        << r.expires_at_ms << "\t" << r.hit_count << "\t" << r.tag << "\t"
-        << r.mime_type << "\t" << r.etag << "\t" << r.last_modified << "\t"
-        << r.checksum << "\t" << r.checksum_algorithm << "\t"
-        << (r.pinned ? "1" : "0") << "\n";
-  }
+  // Memory is already updated by the caller. Disk IO is coalesced off the
+  // platform thread so a 10k putBytes loop does not rewrite the whole index
+  // on every call. The same TSV format is preserved.
+  ScheduleIndexFlush();
 }
 
 std::string XueHuaNaviteCacheManagerPlugin::ResolveKey(
@@ -708,6 +935,7 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
 
   std::vector<uint8_t> buffer;
   DWORD dwDownloaded = 0;
+  int64_t last_progress_emit_ms = 0;
   do {
     DWORD dwAvailable = 0;
     if (!WinHttpQueryDataAvailable(hRequest, &dwAvailable) || dwAvailable == 0) {
@@ -728,8 +956,14 @@ bool XueHuaNaviteCacheManagerPlugin::ExecuteDownloadLockedOrUnlocked(
     if (WinHttpReadData(hRequest, buffer.data() + cur_size, dwAvailable,
                         &dwDownloaded)) {
       buffer.resize(cur_size + dwDownloaded);
-      EmitProgress(key, url, "inProgress",
-                   static_cast<int64_t>(buffer.size()), -1);
+      // Match Android: at most one in-progress event per 50ms so gallery
+      // downloads cannot saturate the platform thread.
+      const int64_t now_ms = CurrentTimeMs();
+      if (last_progress_emit_ms == 0 || now_ms - last_progress_emit_ms >= 50) {
+        last_progress_emit_ms = now_ms;
+        EmitProgress(key, url, "inProgress",
+                     static_cast<int64_t>(buffer.size()), -1);
+      }
     } else {
       break;
     }
@@ -1040,12 +1274,14 @@ void XueHuaNaviteCacheManagerPlugin::HandleMethodCall(
     auto shared_result =
         std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>>(
             std::move(result));
-    ScheduleDownload(args, [shared_result](const DownloadOutcome& outcome) {
-      if (outcome.ok) {
-        shared_result->Success(flutter::EncodableValue(outcome.result));
-      } else {
-        shared_result->Error(outcome.error_code, outcome.error_msg);
-      }
+    ScheduleDownload(args, [this, shared_result](const DownloadOutcome& outcome) {
+      PostToPlatformThread([shared_result, outcome]() {
+        if (outcome.ok) {
+          shared_result->Success(flutter::EncodableValue(outcome.result));
+        } else {
+          shared_result->Error(outcome.error_code, outcome.error_msg);
+        }
+      });
     });
   } else if (method == "prefetchAll") {
     auto shared_result =
@@ -1076,7 +1312,7 @@ void XueHuaNaviteCacheManagerPlugin::HandleMethodCall(
       for (size_t index = 0; index < requests.size(); ++index) {
         ScheduleDownload(
             requests[index],
-            [shared_result, prefetch_state, index](const DownloadOutcome& outcome) {
+            [this, shared_result, prefetch_state, index](const DownloadOutcome& outcome) {
               flutter::EncodableList list_out;
               bool done = false;
               {
@@ -1098,7 +1334,10 @@ void XueHuaNaviteCacheManagerPlugin::HandleMethodCall(
                 }
               }
               if (done) {
-                shared_result->Success(flutter::EncodableValue(list_out));
+                PostToPlatformThread(
+                    [shared_result, list_out = std::move(list_out)]() {
+                      shared_result->Success(flutter::EncodableValue(list_out));
+                    });
               }
             });
       }

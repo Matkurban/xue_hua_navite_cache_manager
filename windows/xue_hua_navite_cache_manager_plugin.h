@@ -9,6 +9,7 @@
 #include <flutter/standard_method_codec.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -50,7 +51,11 @@ class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin {
  public:
   static void RegisterWithRegistrar(flutter::PluginRegistrarWindows *registrar);
 
-  XueHuaNaviteCacheManagerPlugin();
+  // |registrar| may be null in unit tests. When non-null, platform-thread
+  // delivery prefers PluginRegistrarWindows::PostPlatformThreadTask on SDKs
+  // that provide it.
+  explicit XueHuaNaviteCacheManagerPlugin(
+      flutter::PluginRegistrarWindows* registrar = nullptr);
 
   virtual ~XueHuaNaviteCacheManagerPlugin();
 
@@ -118,9 +123,38 @@ class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin {
   void DownloadWorkerLoop();
   void PostDownloadJob(std::function<void()> job);
 
+  // Queues |task| on the Flutter platform thread. Never invokes |task| inline:
+  // callers such as EmitProgress may hold mutex_.
+  void PostToPlatformThread(std::function<void()> task);
+  void StartPlatformDispatcher();
+  void StopPlatformDispatcher();
+
+  // Marks the index dirty and coalesces disk writes. Safe to call while
+  // mutex_ is held.
+  void ScheduleIndexFlush();
+  void IndexFlushLoop();
+  void FlushIndexSnapshot();
+
+  struct EventDispatchState;
+  // Copies event_state_. The shared_ptr member is read from download workers
+  // and the platform thread; the copy itself must be synchronized.
+  std::shared_ptr<EventDispatchState> CopyEventState() const;
+
   mutable std::mutex mutex_;
-  mutable std::mutex sink_mutex_;
-  std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> event_sink_;
+  flutter::PluginRegistrarWindows* registrar_ = nullptr;
+  mutable std::mutex event_state_mu_;
+  std::shared_ptr<EventDispatchState> event_state_;
+  // HWND of a message-only window created on the platform thread. Stored as
+  // void* so this header does not include windows.h.
+  void* platform_hwnd_ = nullptr;
+
+  std::atomic<bool> index_dirty_{false};
+  std::mutex persist_mutex_;
+  std::condition_variable persist_cv_;
+  std::thread persist_thread_;
+  bool persist_stopping_ = false;
+  bool persist_scheduled_ = false;
+  std::chrono::steady_clock::time_point persist_deadline_{};
 
   int64_t max_disk_cache_bytes_ = 500LL * 1024LL * 1024LL;
   int max_entries_ = 20000;

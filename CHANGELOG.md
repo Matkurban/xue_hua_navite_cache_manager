@@ -1,3 +1,7 @@
+## 1.1.2
+
+* Shortened the pubspec `description` so it meets pub.dev's 60–180 character guidance and search engines can show the full text.
+
 ## 1.1.1
 
 * Fixed Windows `CMakeLists.txt` native-test gate: `if(FALSE AND ${include_..._tests})` expanded to invalid `if(FALSE AND)` when the variable was unset, breaking host app `flutter build windows`.

@@ -101,7 +101,7 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
   private var inFlightDownloads: [String: InFlightDownload] = [:]
   private var taskKeys: [Int: String] = [:]
   /// Keys that currently hold a download-pool permit, so completion is exactly-once.
-  private var permitKeys: Set<String> = [:]
+  private var permitKeys: Set<String> = []
   private var inUseDownloadPermits: Int = 0
   private var pendingDownloadStarts: [() -> Void] = []
   private var downloadSessionStorage: URLSession?

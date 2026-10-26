@@ -1,3 +1,7 @@
+## 1.1.6
+
+* Fixed Darwin plugin compilation. `permitKeys` was initialized with a dictionary literal (`[:]`), which Swift cannot use for `Set<String>`. Both iOS and macOS now use an empty set (`[]`), so the 1.1.5 plugins build again. 1.1.5 was not published.
+
 ## 1.1.5
 
 * Fixed Darwin `flutter_driver` stalls after the example gallery scrolls. `flutter_driver` `waitFor` does not search until `transientCallbackCount` is 0. The gallery's indeterminate `CircularProgressIndicator` (no `Content-Length` yet) and the status banner's indeterminate `LinearProgressIndicator` (latest event `started` / `failed` / `canceled`) never stop ticking, so every later `tapText` hit the 20s command timeout while the isolate itself stayed alive. Loading placeholders are now static unless byte progress is known, and the banner never passes a null progress value.

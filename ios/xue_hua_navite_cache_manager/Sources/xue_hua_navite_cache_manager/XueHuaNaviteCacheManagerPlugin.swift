@@ -8,7 +8,7 @@ import UIKit
 /// Uses `URLSession`, `CryptoKit` (`Insecure.MD5`, `SHA256`), and `FileManager` under
 /// `.cachesDirectory` with `NSURLIsExcludedFromBackupKey`, O(1) running byte tracking,
 /// and debounced background index persistence for 10,000+ cache entries.
-public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler, URLSessionDownloadDelegate {
+public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   private var eventSink: FlutterEventSink?
   private let queue = DispatchQueue(label: "com.kurban.xue_hua_navite_cache_manager.queue", qos: .userInitiated, attributes: .concurrent)
   private let persistQueue = DispatchQueue(label: "com.kurban.xue_hua_navite_cache_manager.persist", qos: .utility)
@@ -92,14 +92,12 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     var task: URLSessionTask?
     var canceled = false
     var watchdog: DispatchWorkItem?
+    var progressTimer: DispatchSourceTimer?
     /// Temp file moved out of URLSession's download location before that callback returns.
     var partialFilePath: String?
-    var httpResponse: HTTPURLResponse?
-    var lastProgressEmitMs: Int64 = 0
   }
 
   private var inFlightDownloads: [String: InFlightDownload] = [:]
-  private var taskKeys: [Int: String] = [:]
   /// Keys that currently hold a download-pool permit, so completion is exactly-once.
   private var permitKeys: Set<String> = []
   private var inUseDownloadPermits: Int = 0
@@ -483,44 +481,48 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     NSError(domain: "CANCELED", code: -2, userInfo: [NSLocalizedDescriptionKey: "Download canceled"])
   }
 
-  /// Dedicated session. Created on the main thread: iOS CFNetwork can abort if
-  /// `URLSession` is first initialized on a GCD worker. The delegate queue is
-  /// a background serial queue so file moves never block the UI isolate.
-  /// `httpMaximumConnectionsPerHost` is only a ceiling; [acquireDownloadPermit]
-  /// enforces `maxConcurrentDownloads`.
+  /// Dedicated session with no delegate. Completion handlers run on the
+  /// session's private serial queue.
+  ///
+  /// iOS simulator `URLSessionDownloadDelegate` callbacks were not delivered
+  /// (macOS delivers them, which is why desktop drive is green). `downloadFile`
+  /// then never replied, so the example left Fetch busy and never built
+  /// `Last Fetch Result`. The old `DispatchQueue.main.sync` creation path can
+  /// also deadlock: iOS `URLSession` init syncs to main again while the
+  /// download queue is blocked inside that sync, and the watchdog was armed
+  /// only after `downloadTask` returned.
+  ///
+  /// The first session is created on the main thread asynchronously so
+  /// `configure` has already applied timeouts. `httpMaximumConnectionsPerHost`
+  /// is only a ceiling; [acquireDownloadPermit] enforces `maxConcurrentDownloads`.
   private func downloadSession() -> URLSession {
     lock.lock()
-    let existing = downloadSessionStorage
-    lock.unlock()
-    if let existing {
+    if let existing = downloadSessionStorage {
+      lock.unlock()
       return existing
     }
-    let create = { () -> URLSession in
-      self.lock.lock()
-      if let existing = self.downloadSessionStorage {
-        self.lock.unlock()
-        return existing
-      }
-      self.lock.unlock()
-      let session = self.makeDownloadSession()
-      self.lock.lock()
-      if let existing = self.downloadSessionStorage {
-        self.lock.unlock()
-        session.invalidateAndCancel()
-        return existing
-      }
-      self.downloadSessionStorage = session
-      self.lock.unlock()
-      return session
+    lock.unlock()
+    let session = makeDownloadSession()
+    lock.lock()
+    if let existing = downloadSessionStorage {
+      lock.unlock()
+      session.invalidateAndCancel()
+      return existing
     }
-    if Thread.isMainThread {
-      return create()
-    }
-    return DispatchQueue.main.sync(execute: create)
+    downloadSessionStorage = session
+    lock.unlock()
+    return session
   }
 
   private func makeDownloadSession() -> URLSession {
+    // Ephemeral on the simulator skips the on-disk HTTP storage that Apple
+    // DTS found wedged default URLSession in the simulator (forums/thread/777999).
+    // Devices keep the default configuration.
+    #if targetEnvironment(simulator)
+    let config = URLSessionConfiguration.ephemeral
+    #else
     let config = URLSessionConfiguration.default
+    #endif
     config.requestCachePolicy = .reloadIgnoringLocalCacheData
     config.urlCache = nil
     config.httpMaximumConnectionsPerHost = 32
@@ -529,11 +531,7 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     let resourceSeconds = TimeInterval(max(1, connectTimeoutMs + readTimeoutMs)) / 1000.0
     config.timeoutIntervalForRequest = requestSeconds
     config.timeoutIntervalForResource = resourceSeconds
-    let delegateQueue = OperationQueue()
-    delegateQueue.name = "com.kurban.xue_hua_navite_cache_manager.download-delegate"
-    delegateQueue.maxConcurrentOperationCount = 1
-    delegateQueue.qualityOfService = .userInitiated
-    return URLSession(configuration: config, delegate: self, delegateQueue: delegateQueue)
+    return URLSession(configuration: config)
   }
 
   private func updateMaxConcurrentDownloads(_ newValue: Int) {
@@ -578,11 +576,10 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     let flight = inFlightDownloads.removeValue(forKey: key)
     downloadContexts.removeValue(forKey: key)
     let heldPermit = permitKeys.remove(key) != nil
-    if let taskId = flight?.task?.taskIdentifier {
-      taskKeys.removeValue(forKey: taskId)
-    }
     let watchdog = flight?.watchdog
+    let progressTimer = flight?.progressTimer
     lock.unlock()
+    progressTimer?.cancel()
     watchdog?.cancel()
     flight?.waiters.forEach { $0(outcome) }
     if heldPermit {
@@ -655,6 +652,12 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     urlRequest.httpMethod = "GET"
     urlRequest.timeoutInterval = TimeInterval(connectTimeoutMs + readTimeoutMs) / 1000.0
     urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
+    #if targetEnvironment(simulator)
+    // The iOS Simulator URLSession stack can stall a default HTTP/3 attempt
+    // until the resource timeout (Apple DTS, forums/thread/777999). macOS on
+    // the same host finishes this request. Opt the simulator out of HTTP/3.
+    urlRequest.assumesHTTP3Capable = false
+    #endif
     for (headerName, headerValue) in defaultHeaders {
       urlRequest.setValue(headerValue, forHTTPHeaderField: headerName)
     }
@@ -692,40 +695,23 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
   }
 
   private func startPermittedDownload(_ context: NetworkDownloadContext) {
-    let session = downloadSession()
-    lock.lock()
-    permitKeys.insert(context.key)
-    guard inFlightDownloads[context.key] != nil, inFlightDownloads[context.key]?.canceled == false else {
-      lock.unlock()
-      finishInFlight(key: context.key, outcome: .failure(canceledDownloadError()))
-      return
-    }
-    downloadContexts[context.key] = context
-    lock.unlock()
-
-    // Do not call into URLSession while `lock` is held. Session startup can
-    // hop to the main thread, and the main thread also takes `lock`.
-    let task = session.downloadTask(with: context.urlRequest)
-
-    lock.lock()
-    guard let flight = inFlightDownloads[context.key], !flight.canceled else {
-      lock.unlock()
-      task.cancel()
-      finishInFlight(key: context.key, outcome: .failure(canceledDownloadError()))
-      return
-    }
-    flight.task = task
-    taskKeys[task.taskIdentifier] = context.key
     let timeoutSec = TimeInterval(max(1, connectTimeoutMs + readTimeoutMs)) / 1000.0 + 1
-    let watchdog = DispatchWorkItem { [weak self, weak task] in
+    // Arm the watchdog before any URLSession call. `task.cancel()` used to run
+    // before the fallback was scheduled; cancel waits on the session queue, so
+    // a stuck delegate queue swallowed the timeout and left downloadFile open.
+    let watchdog = DispatchWorkItem { [weak self] in
       guard let self else { return }
-      task?.cancel()
+      self.lock.lock()
+      let task = self.inFlightDownloads[context.key]?.task
+      let stillWaiting = self.inFlightDownloads[context.key] != nil
+      self.lock.unlock()
+      guard stillWaiting else { return }
       DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) { [weak self] in
         guard let self else { return }
         self.lock.lock()
-        let stillWaiting = self.inFlightDownloads[context.key] != nil
+        let waiting = self.inFlightDownloads[context.key] != nil
         self.lock.unlock()
-        guard stillWaiting else { return }
+        guard waiting else { return }
         self.discardPartialFile(forKey: context.key)
         self.emitProgress(
           key: context.key,
@@ -744,17 +730,110 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
           ))
         )
       }
+      task?.cancel()
     }
+
+    lock.lock()
+    permitKeys.insert(context.key)
+    guard let flight = inFlightDownloads[context.key], !flight.canceled else {
+      lock.unlock()
+      finishInFlight(key: context.key, outcome: .failure(canceledDownloadError()))
+      return
+    }
+    downloadContexts[context.key] = context
     flight.watchdog = watchdog
     lock.unlock()
     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeoutSec, execute: watchdog)
+
+    let launch = { [weak self] in
+      self?.resumeDownloadTask(context)
+    }
+    // First URLSession must be created on the main thread (CFNetwork aborts
+    // otherwise) but must not use main.sync from this queue.
+    lock.lock()
+    let sessionReady = downloadSessionStorage != nil
+    lock.unlock()
+    if Thread.isMainThread || sessionReady {
+      launch()
+    } else {
+      DispatchQueue.main.async(execute: launch)
+    }
+  }
+
+  private func resumeDownloadTask(_ context: NetworkDownloadContext) {
+    let session = downloadSession()
+    // Completion-handler download tasks stream to disk and always invoke the
+    // handler. The delegate-only task used previously never called
+    // didCompleteWithError on the iOS simulator, so the method channel hung.
+    let task = session.downloadTask(with: context.urlRequest) { [weak self] location, response, error in
+      guard let self else { return }
+      self.lock.lock()
+      let current = self.downloadContexts[context.key]
+      let waiting = self.inFlightDownloads[context.key] != nil
+      self.lock.unlock()
+      guard waiting, let current else { return }
+
+      var fileURL: URL?
+      if let location {
+        let partial = self.getCacheRootURL().appendingPathComponent("\(context.key).partial")
+        try? FileManager.default.removeItem(at: partial)
+        do {
+          // URLSession deletes `location` when this handler returns.
+          try FileManager.default.moveItem(at: location, to: partial)
+          fileURL = partial
+          self.lock.lock()
+          self.inFlightDownloads[context.key]?.partialFilePath = partial.path
+          self.lock.unlock()
+        } catch {
+          fileURL = nil
+        }
+      }
+      self.finishNetworkDownload(current, fileURL: fileURL, response: response, error: error)
+      if let path = fileURL?.path, path.hasSuffix(".partial"), FileManager.default.fileExists(atPath: path) {
+        try? FileManager.default.removeItem(atPath: path)
+      }
+    }
+
+    lock.lock()
+    guard let flight = inFlightDownloads[context.key], !flight.canceled else {
+      lock.unlock()
+      task.cancel()
+      finishInFlight(key: context.key, outcome: .failure(canceledDownloadError()))
+      return
+    }
+    flight.task = task
+    lock.unlock()
+    startProgressPolling(task: task, key: context.key, url: context.urlString)
     task.resume()
   }
 
-  private func lookupTaskKey(_ task: URLSessionTask) -> String? {
+  /// Delegate `didWriteData` no longer runs. Poll the task so progress events
+  /// stay throttled to 50ms without a URLSessionDownloadDelegate.
+  private func startProgressPolling(task: URLSessionTask, key: String, url: String) {
+    let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+    timer.schedule(deadline: .now() + .milliseconds(50), repeating: .milliseconds(50))
+    timer.setEventHandler { [weak self, weak task] in
+      guard let self, let task else { return }
+      self.lock.lock()
+      let live = self.inFlightDownloads[key] != nil
+      self.lock.unlock()
+      guard live else { return }
+      let received = task.countOfBytesReceived
+      if received <= 0 { return }
+      let expected = task.countOfBytesExpectedToReceive
+      let total = expected > 0 ? expected : -1
+      self.emitProgress(
+        key: key,
+        url: url,
+        state: "inProgress",
+        bytesReceived: received,
+        totalBytes: total
+      )
+    }
     lock.lock()
-    defer { lock.unlock() }
-    return taskKeys[task.taskIdentifier]
+    inFlightDownloads[key]?.progressTimer = timer
+    lock.unlock()
+    timer.resume()
   }
 
   private func discardPartialFile(forKey key: String) {
@@ -1374,96 +1453,5 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
       "storageMechanism": "NSCachesDirectory (ExcludedFromBackup) + URLSession + Debounced Index",
       "defaultCacheRootPath": getCacheRootURL().path,
     ])
-  }
-
-  public func urlSession(
-    _ session: URLSession,
-    downloadTask: URLSessionDownloadTask,
-    didFinishDownloadingTo location: URL
-  ) {
-    guard let key = lookupTaskKey(downloadTask) else { return }
-    let partial = getCacheRootURL().appendingPathComponent("\(key).partial")
-    try? FileManager.default.removeItem(at: partial)
-    do {
-      try FileManager.default.moveItem(at: location, to: partial)
-    } catch {
-      return
-    }
-    lock.lock()
-    if let flight = inFlightDownloads[key] {
-      flight.partialFilePath = partial.path
-      flight.httpResponse = downloadTask.response as? HTTPURLResponse
-      lock.unlock()
-    } else {
-      lock.unlock()
-      try? FileManager.default.removeItem(at: partial)
-    }
-  }
-
-  public func urlSession(
-    _ session: URLSession,
-    downloadTask: URLSessionDownloadTask,
-    didWriteData bytesWritten: Int64,
-    totalBytesWritten: Int64,
-    totalBytesExpectedToWrite: Int64
-  ) {
-    guard let key = lookupTaskKey(downloadTask) else { return }
-    let now = Int64(Date().timeIntervalSince1970 * 1000)
-    lock.lock()
-    guard let flight = inFlightDownloads[key] else {
-      lock.unlock()
-      return
-    }
-    let due = flight.lastProgressEmitMs == 0 || now - flight.lastProgressEmitMs >= 50
-    if due {
-      flight.lastProgressEmitMs = now
-    }
-    let url = downloadContexts[key]?.urlString
-    lock.unlock()
-    guard due, let url else { return }
-    let total = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : -1
-    emitProgress(
-      key: key,
-      url: url,
-      state: "inProgress",
-      bytesReceived: totalBytesWritten,
-      totalBytes: total
-    )
-  }
-
-  public func urlSession(
-    _ session: URLSession,
-    task: URLSessionTask,
-    didCompleteWithError error: Error?
-  ) {
-    guard let key = lookupTaskKey(task) else { return }
-    lock.lock()
-    let context = downloadContexts[key]
-    let partialPath = inFlightDownloads[key]?.partialFilePath
-    let storedResponse = inFlightDownloads[key]?.httpResponse
-    lock.unlock()
-    let response = storedResponse ?? (task.response as? HTTPURLResponse)
-    if let context {
-      let fileURL = partialPath.map { URL(fileURLWithPath: $0) }
-      finishNetworkDownload(context, fileURL: fileURL, response: response, error: error)
-    } else if inFlightStillWaiting(key) {
-      finishInFlight(
-        key: key,
-        outcome: .failure(NSError(
-          domain: "NETWORK_ERROR",
-          code: (error as NSError?)?.code ?? -1,
-          userInfo: [NSLocalizedDescriptionKey: error?.localizedDescription ?? "Download failed"]
-        ))
-      )
-    }
-    if let partialPath, FileManager.default.fileExists(atPath: partialPath) {
-      try? FileManager.default.removeItem(atPath: partialPath)
-    }
-  }
-
-  private func inFlightStillWaiting(_ key: String) -> Bool {
-    lock.lock()
-    defer { lock.unlock() }
-    return inFlightDownloads[key] != nil
   }
 }

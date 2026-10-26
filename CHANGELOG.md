@@ -1,3 +1,10 @@
+## 1.1.4
+
+* Fixed Windows platform-thread delivery for the event channel and download method results. `EventSink` and `MethodResult` are no longer invoked from WinHTTP worker threads. Flutter 3.50 and newer SDKs use `PluginRegistrarWindows::PostPlatformThreadTask` when that API is present; earlier 3.47+ SDKs post to a message-only window created on the platform thread, which is the thread the engine requires.
+* Throttled Windows `inProgress` events to one per 50ms so gallery downloads do not flood the platform thread.
+* Windows cache-index writes are now debounced (600ms) and flushed off the platform thread, matching the documented 10,000-entry index engine, so the example stress benchmark does not rewrite the full index on every `putBytes`.
+* Replaced deprecated `package:flutter/material.dart` imports with `package:material_ui/material_ui.dart` (`material_ui: ^1.0.0`) so root `flutter analyze` is clean on Flutter 3.47+.
+
 ## 1.1.3
 
 * Corrected the example integration test checksum expectation for the loopback payload.

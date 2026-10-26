@@ -745,18 +745,21 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     lock.unlock()
     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeoutSec, execute: watchdog)
 
-    let launch = { [weak self] in
-      self?.resumeDownloadTask(context)
-    }
     // First URLSession must be created on the main thread (CFNetwork aborts
     // otherwise) but must not use main.sync from this queue.
+    // Do not store `{ [weak self] in self?.resumeDownloadTask(...) }`.
+    // Optional chaining makes that closure `() -> ()?`, and
+    // `async(execute:)` then binds the DispatchWorkItem overload.
     lock.lock()
     let sessionReady = downloadSessionStorage != nil
     lock.unlock()
     if Thread.isMainThread || sessionReady {
-      launch()
+      resumeDownloadTask(context)
     } else {
-      DispatchQueue.main.async(execute: launch)
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.resumeDownloadTask(context)
+      }
     }
   }
 

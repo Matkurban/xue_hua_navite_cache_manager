@@ -381,38 +381,137 @@ void EmitProgress(XueHuaNaviteCacheManagerPlugin* self,
   fl_event_channel_send(self->event_channel, map, nullptr, nullptr);
 }
 
-bool DownloadViaCurlOrGio(const std::string& url,
-                          const std::string& dest_tmp_path,
-                          int timeout_sec,
-                          const std::string& extra_headers,
-                          std::string* out_err) {
+struct CurlHttpResult {
+  bool ok = false;
+  int status = 0;
+  std::string etag;
+  std::string last_modified;
+  std::string content_type;
+  std::string error;
+};
+
+std::string AsciiLower(const std::string& in) {
+  std::string out = in;
+  for (char& c : out) {
+    c = static_cast<char>(g_ascii_tolower(static_cast<gchar>(c)));
+  }
+  return out;
+}
+
+std::string TrimAscii(const std::string& in) {
+  size_t begin = 0;
+  while (begin < in.size() &&
+         (in[begin] == ' ' || in[begin] == '\t' || in[begin] == '\r')) {
+    begin++;
+  }
+  size_t end = in.size();
+  while (end > begin &&
+         (in[end - 1] == ' ' || in[end - 1] == '\t' || in[end - 1] == '\r')) {
+    end--;
+  }
+  return in.substr(begin, end - begin);
+}
+
+void ParseLastHeaderBlock(const std::string& raw, CurlHttpResult* result) {
+  std::map<std::string, std::string> headers;
+  std::istringstream in(raw);
+  std::string line;
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.compare(0, 5, "HTTP/") == 0) {
+      headers.clear();
+      continue;
+    }
+    const auto colon = line.find(':');
+    if (colon == std::string::npos) continue;
+    const std::string name = AsciiLower(TrimAscii(line.substr(0, colon)));
+    headers[name] = TrimAscii(line.substr(colon + 1));
+  }
+  const auto etag = headers.find("etag");
+  if (etag != headers.end()) result->etag = etag->second;
+  const auto modified = headers.find("last-modified");
+  if (modified != headers.end()) result->last_modified = modified->second;
+  const auto type = headers.find("content-type");
+  if (type != headers.end()) {
+    const auto semi = type->second.find(';');
+    result->content_type = TrimAscii(semi == std::string::npos
+                                         ? type->second
+                                         : type->second.substr(0, semi));
+  }
+}
+
+int ParseHttpStatus(const std::string& stdout_text) {
+  int status = 0;
+  std::istringstream in(stdout_text);
+  std::string line;
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    line = TrimAscii(line);
+    if (!line.empty()) status = std::atoi(line.c_str());
+  }
+  return status;
+}
+
+CurlHttpResult DownloadViaCurlOrGio(const std::string& url,
+                                    const std::string& dest_tmp_path,
+                                    int timeout_sec,
+                                    const std::string& extra_headers) {
+  CurlHttpResult result;
+  const std::string header_path = dest_tmp_path + ".hdr";
   gchar* quoted_url = g_shell_quote(url.c_str());
   gchar* quoted_dest = g_shell_quote(dest_tmp_path.c_str());
+  gchar* quoted_hdr = g_shell_quote(header_path.c_str());
+  gchar* quoted_write_out = g_shell_quote("%{http_code}");
   g_autofree gchar* cmd = g_strdup_printf(
-      "curl -sS -L --fail --max-time %d%s -o %s %s",
-      timeout_sec > 0 ? timeout_sec : 30, extra_headers.c_str(), quoted_dest,
-      quoted_url);
+      "curl -sS -L --max-time %d -D %s -o %s -w %s%s %s",
+      timeout_sec > 0 ? timeout_sec : 30, quoted_hdr, quoted_dest,
+      quoted_write_out, extra_headers.c_str(), quoted_url);
   g_free(quoted_url);
   g_free(quoted_dest);
+  g_free(quoted_hdr);
+  g_free(quoted_write_out);
 
   gint exit_status = 0;
+  g_autofree gchar* std_out = nullptr;
   g_autofree gchar* std_err = nullptr;
   GError* error = nullptr;
-  gboolean spawned = g_spawn_command_line_sync(cmd, nullptr, &std_err,
-                                               &exit_status, &error);
-  if (spawned && exit_status == 0 &&
-      g_file_test(dest_tmp_path.c_str(), G_FILE_TEST_EXISTS)) {
-    return true;
+  const gboolean spawned = g_spawn_command_line_sync(
+      cmd, &std_out, &std_err, &exit_status, &error);
+  if (g_file_test(header_path.c_str(), G_FILE_TEST_EXISTS)) {
+    gchar* header_text = nullptr;
+    gsize header_len = 0;
+    if (g_file_get_contents(header_path.c_str(), &header_text, &header_len,
+                            nullptr) &&
+        header_text) {
+      ParseLastHeaderBlock(std::string(header_text, header_len), &result);
+      g_free(header_text);
+    }
+    std::remove(header_path.c_str());
   }
+
+  result.status = ParseHttpStatus(std_out ? std_out : "");
+  const bool status_ok =
+      result.status == 304 || (result.status >= 200 && result.status <= 299);
+  const bool body_ready =
+      result.status == 304 ||
+      g_file_test(dest_tmp_path.c_str(), G_FILE_TEST_EXISTS);
+  if (spawned && error == nullptr && exit_status == 0 && status_ok &&
+      body_ready) {
+    result.ok = true;
+    return result;
+  }
+
   if (error) {
-    *out_err = error->message;
+    result.error = error->message;
     g_error_free(error);
-  } else if (std_err) {
-    *out_err = std_err;
+  } else if (std_err && std_err[0] != '\0') {
+    result.error = std_err;
+  } else if (result.status != 0) {
+    result.error = "HTTP status " + std::to_string(result.status);
   } else {
-    *out_err = "Network download failed";
+    result.error = "Network download failed";
   }
-  return false;
+  return result;
 }
 
 struct DownloadRequest {
@@ -706,7 +805,6 @@ DownloadOutcome ExecuteDownload(
 
   PostProgress(self, key, request.url, "started", 0, -1);
   std::string tmp_path = GetCacheRootDir() + "/" + key + ".tmp";
-  std::string dl_err;
   int timeout_sec = (g_connect_timeout_ms + g_read_timeout_ms) / 1000;
 
   std::string extra_headers;
@@ -727,8 +825,9 @@ DownloadOutcome ExecuteDownload(
     }
   }
 
-  if (!DownloadViaCurlOrGio(request.url, tmp_path, timeout_sec, extra_headers,
-                            &dl_err)) {
+  const CurlHttpResult downloaded =
+      DownloadViaCurlOrGio(request.url, tmp_path, timeout_sec, extra_headers);
+  if (!downloaded.ok) {
     std::remove(tmp_path.c_str());
     if (cancel_flag && cancel_flag->load()) {
       PostProgress(self, key, request.url, "canceled", 0, -1, "",
@@ -739,8 +838,9 @@ DownloadOutcome ExecuteDownload(
       return MakeSuccess(existing, "staleCacheFallback", false, 0,
                          CurrentTimeMs() - start_ms);
     }
-    PostProgress(self, key, request.url, "failed", 0, -1, "", dl_err);
-    return MakeFailure("DOWNLOAD_FAILED", dl_err);
+    PostProgress(self, key, request.url, "failed", 0, -1, "", downloaded.error);
+    return MakeFailure(downloaded.status >= 400 ? "HTTP_ERROR" : "DOWNLOAD_FAILED",
+                       downloaded.error);
   }
 
   if (cancel_flag && cancel_flag->load()) {
@@ -748,6 +848,35 @@ DownloadOutcome ExecuteDownload(
     PostProgress(self, key, request.url, "canceled", 0, -1, "",
                  "Download canceled");
     return MakeFailure("CANCELED", "Download canceled");
+  }
+
+  if (downloaded.status == 304 && has_existing) {
+    std::remove(tmp_path.c_str());
+    const int64_t now = CurrentTimeMs();
+    LinuxCacheRecord refreshed = existing;
+    {
+      std::lock_guard<std::mutex> lock(g_mutex);
+      auto it = g_entries.find(key);
+      if (it != g_entries.end()) refreshed = it->second;
+      refreshed.last_accessed_at_ms = now;
+      refreshed.expires_at_ms =
+          now +
+          (request.has_ttl ? request.ttl_sec : g_default_ttl_seconds) * 1000LL;
+      refreshed.hit_count += 1;
+      if (!downloaded.etag.empty()) refreshed.etag = downloaded.etag;
+      if (!downloaded.last_modified.empty()) {
+        refreshed.last_modified = downloaded.last_modified;
+      }
+      if (!request.tag.empty()) refreshed.tag = request.tag;
+      if (request.pinned) refreshed.pinned = true;
+      g_hit_count++;
+      g_entries[key] = refreshed;
+      PersistIndexLocked();
+    }
+    PostProgress(self, key, request.url, "cacheHit", refreshed.size_bytes,
+                 refreshed.size_bytes, refreshed.file_path);
+    return MakeSuccess(refreshed, "revalidated", true, 304,
+                       CurrentTimeMs() - start_ms);
   }
 
   gchar* contents = nullptr;
@@ -788,7 +917,10 @@ DownloadOutcome ExecuteDownload(
       now + (request.has_ttl ? request.ttl_sec : g_default_ttl_seconds) * 1000LL;
   rec.hit_count = 1;
   rec.tag = request.tag;
-  rec.mime_type = "application/octet-stream";
+  rec.mime_type = downloaded.content_type.empty() ? "application/octet-stream"
+                                                  : downloaded.content_type;
+  rec.etag = downloaded.etag;
+  rec.last_modified = downloaded.last_modified;
   rec.checksum = computed_hash;
   rec.checksum_algorithm = request.checksum_alg;
   rec.pinned = request.pinned;
@@ -804,7 +936,9 @@ DownloadOutcome ExecuteDownload(
 
   PostProgress(self, key, request.url, "completed", rec.size_bytes,
                rec.size_bytes, rec.file_path);
-  return MakeSuccess(rec, "networkDownload", true, 200, CurrentTimeMs() - start_ms);
+  return MakeSuccess(rec, "networkDownload", true,
+                     downloaded.status == 0 ? 200 : downloaded.status,
+                     CurrentTimeMs() - start_ms);
 }
 
 void FinishInFlight(const std::string& key,

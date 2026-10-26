@@ -1,3 +1,7 @@
+## 1.1.9
+
+* Fixed iOS simulator Fetch so the example can show Last Fetch Result. `assumesHTTP3Capable = false` does not disable HTTP/3 (it is the default), so the iOS 27 simulator still tried QUIC and the download never finished. `downloadTask` completion handlers and `didCompleteWithError` were both silent, so `downloadFile` never replied. The simulator session now caps TLS at 1.2 (HTTP/1.1 only) and loads the body with `URLSession.data(for:)` on an explicit serial delegate queue. `finishNetworkDownload` then posts `FlutterResult` on the main queue, which is what the example turns into Last Fetch Result (or Download error). Devices still stream with a delegate `downloadTask`. macOS is unchanged.
+
 ## 1.1.8
 
 * Fixed iOS compilation. The `main.async` closure that starts the first download used optional chaining (`self?.resumeDownloadTask`), so its type was `() -> ()?` and `DispatchQueue.async(execute:)` selected the `DispatchWorkItem` overload. The hop is now a `Void` closure. The 1.1.7 download-completion behavior is unchanged. 1.1.7 was not published.

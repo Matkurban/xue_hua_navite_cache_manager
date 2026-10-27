@@ -83,7 +83,7 @@ import 'package:xue_hua_navite_cache_manager/xue_hua_navite_cache_manager.dart';
 
 // 1a. 使用 CachedNetworkImage 组件（支持降采样解码、实时进度条与错误占位）
 CachedNetworkImage(
-  imageUrl: 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+  imageUrl: 'https://httpbin.org/image/jpeg',
   tag: 'wildlife',
   width: 200,
   height: 200,
@@ -104,7 +104,7 @@ CachedNetworkImage(
 const CircleAvatar(
   radius: 40,
   backgroundImage: CachedNetworkImageProvider(
-    'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
+    'https://www.gstatic.com/webp/gallery/1.jpg',
     tag: 'avatars',
     maxWidth: 160,
   ),
@@ -148,7 +148,7 @@ Future<void> initCache() async {
 ```dart
 final result = await cache.downloadFile(
   const CacheRequest(
-    url: 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+    url: 'https://httpbin.org/image/jpeg',
     tag: 'wildlife',
     fallbackToCacheOnError: true,
     checksumAlgorithm: CacheChecksumAlgorithm.sha256,
@@ -164,7 +164,7 @@ print('文件大小: ${result.entry.sizeBytes} 字节, SHA-256: ${result.entry.c
 
 ```dart
 final entry = await cache.getSingleFile(
-  'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
+  'https://www.gstatic.com/webp/gallery/1.jpg',
   tag: 'wildlife',
 );
 ```
@@ -173,7 +173,7 @@ final entry = await cache.getSingleFile(
 
 ```dart
 final subscription = cache
-    .watchProgress('https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4')
+    .watchProgress('https://filesamples.com/samples/video/mp4/sample_640x360.mp4')
     .listen((event) {
   final percent = ((event.progress ?? 0) * 100).toStringAsFixed(1);
   print('[${event.state.wireValue}] $percent% (${event.bytesReceived}/${event.totalBytes})');
@@ -189,22 +189,22 @@ final subscription = cache
 // 批量预加载网络资源
 final entries = await cache.prefetchAll(const <CacheRequest>[
   CacheRequest(
-    url: 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+    url: 'https://httpbin.org/image/jpeg',
     tag: 'onboarding',
     pinned: true,
   ),
   CacheRequest(
-    url: 'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
+    url: 'https://www.gstatic.com/webp/gallery/1.jpg',
     tag: 'onboarding',
   ),
 ]);
 
 // 仅查询本地缓存（不发起网络请求）
 final cachedEntry = await cache.getFileFromCache(
-  'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+  'https://httpbin.org/image/jpeg',
 );
 final bytes = await cache.readCacheBytes(
-  'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+  'https://httpbin.org/image/jpeg',
 );
 ```
 

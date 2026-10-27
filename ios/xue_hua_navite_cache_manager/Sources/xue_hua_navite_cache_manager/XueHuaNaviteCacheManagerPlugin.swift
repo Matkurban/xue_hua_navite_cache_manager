@@ -3,11 +3,6 @@ import Flutter
 import Foundation
 import UIKit
 
-/// Simulator sessions need a delegate so `data(for:)` resumes on a queue we
-/// own. This anchor implements no download callbacks, so it cannot double-complete
-/// the method channel. The plugin itself is the device download delegate.
-private final class SimulatorDownloadSessionAnchor: NSObject, URLSessionDelegate {}
-
 /// Native iOS implementation of `xue_hua_navite_cache_manager`.
 ///
 /// Uses `URLSession`, `CryptoKit` (`Insecure.MD5`, `SHA256`), and `FileManager` under
@@ -97,8 +92,6 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     var task: URLSessionTask?
     var canceled = false
     var watchdog: DispatchWorkItem?
-    /// Simulator `data(for:)` task. Canceled with the URLSession task.
-    var bodyTask: Task<Void, Never>?
     /// Temp file moved out of URLSession's download location before that callback returns.
     var partialFilePath: String?
     var httpResponse: HTTPURLResponse?
@@ -112,11 +105,6 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
   private var inUseDownloadPermits: Int = 0
   private var pendingDownloadStarts: [() -> Void] = []
   private var downloadSessionStorage: URLSession?
-#if targetEnvironment(simulator)
-  /// Retained for the life of the plugin. URLSession also retains it, but the
-  /// anchor must not be a temporary or the delegate queue never fires.
-  private let simulatorSessionAnchor = SimulatorDownloadSessionAnchor()
-#endif
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let methodChannel = FlutterMethodChannel(
@@ -463,14 +451,30 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
 
   private func handleDownloadFile(args: [String: Any], result: @escaping FlutterResult) {
     executeDownload(args: args) { outcome in
-      DispatchQueue.main.async {
-        switch outcome {
-        case .success(let map):
-          result(self.flutterPayload(map))
-        case .failure(let error as NSError):
-          result(FlutterError(code: error.domain, message: error.localizedDescription, details: error.code))
+      // FlutterResult has to run on the platform (main) thread. Invoke it
+      // inline when the waiter is already there so a session queue blocked
+      // in `main.sync` cannot leave the reply sitting in `main.async`.
+      // Every other caller hops. Both paths call `result` exactly once.
+      if Thread.isMainThread {
+        self.emitDownloadResult(outcome, result: result)
+      } else {
+        DispatchQueue.main.async {
+          self.emitDownloadResult(outcome, result: result)
         }
       }
+    }
+  }
+
+  private func emitDownloadResult(
+    _ outcome: Result<[String: Any?], Error>,
+    result: @escaping FlutterResult
+  ) {
+    switch outcome {
+    case .success(let map):
+      result(flutterPayload(map))
+    case .failure(let error):
+      let nsError = error as NSError
+      result(FlutterError(code: nsError.domain, message: nsError.localizedDescription, details: nsError.code))
     }
   }
 
@@ -501,9 +505,8 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
   /// deadlocks, and creating it on a bare GCD worker can abort CFNetwork.
   ///
   /// On device, delegate callbacks run on a serial background OperationQueue.
-  /// On the simulator, `data(for:)` resumes on that same kind of queue, then
-  /// the method result is posted to the main queue.
-  /// `httpMaximumConnectionsPerHost`
+  /// On the simulator there is no session delegate: `dataTask` completion
+  /// handlers are what call [finishNetworkDownload]. `httpMaximumConnectionsPerHost`
   /// is only a ceiling; [acquireDownloadPermit] enforces `maxConcurrentDownloads`.
   private func downloadSession() -> URLSession {
     lock.lock()
@@ -528,13 +531,11 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     // Ephemeral on the simulator skips the on-disk HTTP storage that Apple
     // DTS found wedged in the simulator (forums/thread/777999).
     //
-    // That storage bug is not the whole hang. `assumesHTTP3Capable = false`
-    // does not disable HTTP/3 (false is the default). The iOS 27 simulator
-    // still opens QUIC from DNS HTTPS records, the attempt never falls back,
-    // and the task never finishes — so neither a completion handler nor
-    // `didCompleteWithError` runs, and Dart never builds Last Fetch Result.
-    // TLS 1.2 cannot negotiate HTTP/2 or HTTP/3, so the simulator uses
-    // HTTP/1.1. Devices keep the default configuration and HTTP/2/3.
+    // `assumesHTTP3Capable = false` does not disable HTTP/3 (false is the
+    // default). The iOS 27 simulator follows DNS HTTPS records onto QUIC and
+    // that attempt never falls back. Capping TLS at 1.2 blocks QUIC. HTTP/2
+    // over TLS 1.2 still completes (1.1.9 retest: h2, status 200, ~69KB).
+    // Devices keep the default configuration and HTTP/2/3.
     #if targetEnvironment(simulator)
     let config = URLSessionConfiguration.ephemeral
     config.tlsMaximumSupportedProtocolVersion = .TLSv12
@@ -550,19 +551,14 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     config.timeoutIntervalForRequest = requestSeconds
     config.timeoutIntervalForResource = resourceSeconds
     #if targetEnvironment(simulator)
-    // `data(for:)` resumes its continuation on the session delegate queue.
-    // The no-delegate private queue never delivered on this simulator.
-    // An explicit serial OperationQueue does. The anchor has no download
-    // callbacks, so didCompleteWithError cannot also reply to Dart.
-    let delegateQueue = OperationQueue()
-    delegateQueue.name = "com.kurban.xue_hua_navite_cache_manager.sim-download"
-    delegateQueue.maxConcurrentOperationCount = 1
-    delegateQueue.qualityOfService = .userInitiated
-    return URLSession(
-      configuration: config,
-      delegate: simulatorSessionAnchor,
-      delegateQueue: delegateQueue
-    )
+    // No session delegate. 1.1.9 installed an empty URLSessionDelegate and
+    // loaded the body with `data(for:)`. CFNetwork finished that task (h2,
+    // 200) but the async continuation never resumed: the session delegate
+    // owns task callbacks, the anchor implements none, and `data(for:)`
+    // therefore never reaches finishNetworkDownload. A completion-handler
+    // data task is invoked by URLSession itself on its private serial queue
+    // when the task finishes, which is the queue that can see the 200.
+    return URLSession(configuration: config)
     #else
     // Same shape as the macOS session, which does deliver didCompleteWithError.
     // Serial OperationQueue. Do not also set underlyingQueue.
@@ -620,9 +616,7 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
       taskKeys.removeValue(forKey: taskId)
     }
     let watchdog = flight?.watchdog
-    let bodyTask = flight?.bodyTask
     lock.unlock()
-    bodyTask?.cancel()
     watchdog?.cancel()
     flight?.waiters.forEach { $0(outcome) }
     if heldPermit {
@@ -745,7 +739,6 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
       guard let self else { return }
       self.lock.lock()
       let task = self.inFlightDownloads[context.key]?.task
-      let bodyTask = self.inFlightDownloads[context.key]?.bodyTask
       let stillWaiting = self.inFlightDownloads[context.key] != nil
       self.lock.unlock()
       guard stillWaiting else { return }
@@ -773,7 +766,6 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
           ))
         )
       }
-      bodyTask?.cancel()
       task?.cancel()
     }
 
@@ -816,65 +808,108 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
   }
 
 #if targetEnvironment(simulator)
-  /// Simulator path. `URLSession.downloadTask` never called its completion
-  /// handler or `didCompleteWithError` on the iOS 27 simulator, so the method
-  /// channel stayed open and the example never built Last Fetch Result.
-  /// `data(for:)` resumes on the cooperative pool. The bytes are written to
-  /// the partial file, then [finishNetworkDownload] runs and the waiter posts
-  /// `FlutterResult` on the main queue.
+  /// Simulator path. 1.1.9's `await session.data(for:)` never resumed after
+  /// CFNetwork finished the owl GET: the session delegate (an empty
+  /// `URLSessionDelegate`) owns task callbacks, so the async continuation is
+  /// not resumed and [finishNetworkDownload] never runs. Dart therefore never
+  /// sees Last Fetch Result or Download error inside the driver poll.
+  ///
+  /// `dataTask(with:completionHandler:)` is invoked by URLSession on its
+  /// private queue when that same task finishes. The handler leaves that
+  /// queue immediately, then [finishNetworkDownload] → [finishInFlight] runs
+  /// the waiter, which posts `FlutterResult` on the main queue.
   private func resumeSimulatorDataDownload(_ context: NetworkDownloadContext) {
     let session = downloadSession()
-    let body = Task { [weak self] in
+    let task = session.dataTask(with: context.urlRequest) { [weak self] data, response, error in
       guard let self else { return }
-      do {
-        let (data, response) = try await session.data(for: context.urlRequest)
-        if Task.isCancelled {
-          throw CancellationError()
-        }
-        let partial = self.getCacheRootURL().appendingPathComponent("\(context.key).partial")
-        try? FileManager.default.removeItem(at: partial)
-        try data.write(to: partial, options: .atomic)
-        self.lock.lock()
-        let waiting = self.inFlightDownloads[context.key] != nil
-        if waiting {
-          self.inFlightDownloads[context.key]?.partialFilePath = partial.path
-        }
-        self.lock.unlock()
-        guard waiting else {
-          try? FileManager.default.removeItem(at: partial)
-          return
-        }
-        self.finishNetworkDownload(context, fileURL: partial, response: response, error: nil)
-        if FileManager.default.fileExists(atPath: partial.path) {
-          try? FileManager.default.removeItem(at: partial)
-        }
-      } catch {
-        self.lock.lock()
-        let waiting = self.inFlightDownloads[context.key] != nil
-        self.lock.unlock()
-        guard waiting else { return }
-        let nsError: NSError
-        if error is CancellationError {
-          nsError = NSError(
-            domain: NSURLErrorDomain,
-            code: NSURLErrorCancelled,
-            userInfo: [NSLocalizedDescriptionKey: "cancelled"]
-          )
-        } else {
-          nsError = error as NSError
-        }
-        self.finishNetworkDownload(context, fileURL: nil, response: nil, error: nsError)
+      let body = data
+      let received = response
+      let failure = error
+      self.downloadScheduleQueue.async {
+        self.completeSimulatorDataDownload(
+          context,
+          data: body,
+          response: received,
+          error: failure
+        )
       }
     }
     lock.lock()
     guard let flight = inFlightDownloads[context.key], !flight.canceled else {
       lock.unlock()
-      body.cancel()
+      task.cancel()
       finishInFlight(key: context.key, outcome: .failure(canceledDownloadError()))
       return
     }
-    flight.bodyTask = body
+    flight.task = task
+    taskKeys[task.taskIdentifier] = context.key
     lock.unlock()
+    task.resume()
+  }
+
+  /// Runs on [downloadScheduleQueue], never on URLSession's private queue.
+  /// The in-flight map is keyed by `context.key` (the same string
+  /// [finishNetworkDownload] passes to [finishInFlight]); a key miss is not
+  /// why 1.1.9 dropped the result.
+  private func completeSimulatorDataDownload(
+    _ context: NetworkDownloadContext,
+    data: Data?,
+    response: URLResponse?,
+    error: Error?
+  ) {
+    lock.lock()
+    let waiting = inFlightDownloads[context.key] != nil
+    lock.unlock()
+    guard waiting else { return }
+
+    if let error {
+      finishNetworkDownload(context, fileURL: nil, response: response, error: error)
+      return
+    }
+    guard let data else {
+      finishNetworkDownload(
+        context,
+        fileURL: nil,
+        response: response,
+        error: NSError(
+          domain: "NETWORK_ERROR",
+          code: -1,
+          userInfo: [NSLocalizedDescriptionKey: "Empty response body"]
+        )
+      )
+      return
+    }
+
+    let partial = getCacheRootURL().appendingPathComponent("\(context.key).partial")
+    do {
+      try? FileManager.default.removeItem(at: partial)
+      try data.write(to: partial, options: .atomic)
+    } catch {
+      finishInFlight(
+        key: context.key,
+        outcome: .failure(NSError(
+          domain: "DISK_WRITE_ERROR",
+          code: -4,
+          userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
+        ))
+      )
+      return
+    }
+
+    lock.lock()
+    let stillWaiting = inFlightDownloads[context.key] != nil
+    if stillWaiting {
+      inFlightDownloads[context.key]?.partialFilePath = partial.path
+    }
+    lock.unlock()
+    guard stillWaiting else {
+      try? FileManager.default.removeItem(at: partial)
+      return
+    }
+    finishNetworkDownload(context, fileURL: partial, response: response, error: nil)
+    if FileManager.default.fileExists(atPath: partial.path) {
+      try? FileManager.default.removeItem(at: partial)
+    }
   }
 #endif
 
@@ -1110,10 +1145,8 @@ public class XueHuaNaviteCacheManagerPlugin: NSObject, FlutterPlugin, FlutterStr
     if let flight = flight {
       flight.canceled = true
       let task = flight.task
-      let bodyTask = flight.bodyTask
       lock.unlock()
       task?.cancel()
-      bodyTask?.cancel()
       result(true)
     } else {
       lock.unlock()

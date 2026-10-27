@@ -87,7 +87,7 @@ Future<void> initCache() async {
 
   final result = await cacheManager.downloadFile(
     const CacheRequest(
-      url: 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+      url: 'https://httpbin.org/image/jpeg',
       tag: 'animals',
       fallbackToCacheOnError: true,
       checksumAlgorithm: CacheChecksumAlgorithm.sha256,

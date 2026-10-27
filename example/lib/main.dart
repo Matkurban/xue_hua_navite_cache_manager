@@ -37,9 +37,12 @@ class CacheWorkbenchPage extends StatefulWidget {
 class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   final XueHuaNaviteCacheManager _cache = XueHuaNaviteCacheManager.instance;
 
+  /// Android API 24 trusts this host. `flutter.github.io` fails there with
+  /// `CertPathValidatorException: Trust anchor for certification path not found`.
+  static const String _defaultFetchUrl = 'https://httpbin.org/image/jpeg';
+
   final TextEditingController _urlController = TextEditingController(
-    text:
-        'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+    text: _defaultFetchUrl,
   );
   final TextEditingController _customKeyController = TextEditingController();
   final TextEditingController _tagController = TextEditingController(
@@ -79,55 +82,60 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
   StreamSubscription<CacheProgressEvent>? _progressSub;
   DateTime _lastProgressUi = DateTime.fromMillisecondsSinceEpoch(0);
 
+  // Chip label "Owl Image (JPG)" is tapped by example/test_driver/app_test.dart.
+  // Hosts below were checked on an API 24 emulator: httpbin, gstatic, and
+  // filesamples validate; flutter.github.io does not.
   static const List<Map<String, String>> _sampleUrls = <Map<String, String>>[
     <String, String>{
       'label': 'Owl Image (JPG)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
+      'url': _defaultFetchUrl,
       'tag': 'images',
     },
     <String, String>{
-      'label': 'Falcon Image (JPG)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
+      'label': 'Gallery Image 1 (JPG)',
+      'url': 'https://www.gstatic.com/webp/gallery/1.jpg',
       'tag': 'images',
     },
     <String, String>{
-      'label': 'Puffin Image (JPG)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/puffin.jpg',
+      'label': 'Gallery Image 2 (JPG)',
+      'url': 'https://www.gstatic.com/webp/gallery/2.jpg',
       'tag': 'images',
     },
     <String, String>{
-      'label': 'Butterfly Video (MP4)',
-      'url': 'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
+      'label': 'Sample Video (MP4)',
+      'url': 'https://filesamples.com/samples/video/mp4/sample_640x360.mp4',
       'tag': 'videos',
     },
   ];
 
-  /// 104 public network images (4 featured Flutter assets + 100 public Picsum photos)
-  /// for testing high-concurrency caching, scrolling, and cross-restart persistence.
-  static final List<Map<String, String>> _publicGalleryImages =
-      <Map<String, String>>[
-        <String, String>{
-          'title': '#1 Owl (Flutter Official Asset)',
-          'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl.jpg',
-        },
-        <String, String>{
-          'title': '#2 Falcon (Pinned Asset)',
-          'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/falcon.jpg',
-        },
-        <String, String>{
-          'title': '#3 Puffin (Circle Avatar Builder)',
-          'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/puffin.jpg',
-        },
-        <String, String>{
-          'title': '#4 Owl-2 (Flutter Official Asset)',
-          'url': 'https://flutter.github.io/assets-for-api-docs/assets/widgets/owl-2.jpg',
-        },
-        for (int i = 1; i <= 100; i++)
-          <String, String>{
-            'title': 'Public Photo #${i + 4} (Picsum ID ${i + 10})',
-            'url': 'https://picsum.photos/id/${i + 10}/400/300',
-          },
-      ];
+  /// 104 HTTPS images (4 gstatic JPEGs + 100 placehold.co JPEGs) for
+  /// concurrency, scrolling, and cross-restart persistence.
+  /// picsum.photos fails Android API 24 trust validation, so it is not used.
+  static final List<Map<String, String>>
+  _publicGalleryImages = <Map<String, String>>[
+    <String, String>{
+      'title': '#1 gstatic gallery/1.jpg',
+      'url': 'https://www.gstatic.com/webp/gallery/1.jpg',
+    },
+    <String, String>{
+      'title': '#2 gstatic gallery/2.jpg (pinned)',
+      'url': 'https://www.gstatic.com/webp/gallery/2.jpg',
+    },
+    <String, String>{
+      'title': '#3 gstatic gallery/3.jpg (circle avatar)',
+      'url': 'https://www.gstatic.com/webp/gallery/3.jpg',
+    },
+    <String, String>{
+      'title': '#4 gstatic gallery/4.jpg',
+      'url': 'https://www.gstatic.com/webp/gallery/4.jpg',
+    },
+    for (int i = 1; i <= 100; i++)
+      <String, String>{
+        'title':
+            'Public Photo #${i + 4} (placehold ${400 + (i % 20)}x${280 + i})',
+        'url': 'https://placehold.co/${400 + (i % 20)}x${280 + i}.jpg',
+      },
+  ];
 
   @override
   void initState() {

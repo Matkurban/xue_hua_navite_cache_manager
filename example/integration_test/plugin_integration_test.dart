@@ -182,4 +182,130 @@ void main() {
       await sub.cancel();
     },
   );
+
+  testWidgets(
+    'Uncovered API surface: getSingleFile, prefetch*, cancel, TTL, trim, list, progress',
+    (WidgetTester tester) async {
+      final cache = XueHuaNaviteCacheManager.instance;
+      final caps = await cache.getCapabilities();
+
+      await cache.configure(
+        const CacheManagerConfig(
+          maxDiskCacheBytes: 50 * 1024 * 1024,
+          maxEntries: 5000,
+          defaultTtlSeconds: 3600,
+          evictionPolicy: CacheEvictionPolicy.lru,
+          cacheSubdirectory: 'xue_hua_e2e_api_gaps',
+          respectHttpCacheHeaders: true,
+          autoTrimOnWrite: true,
+        ),
+      );
+      await cache.clearAll(includePinned: true);
+
+      // putBytes + listEntries + getSingleFile path via download after local HTTP
+      final seed = Uint8List.fromList('gap-seed'.codeUnits);
+      await cache.putBytes(
+        key: 'gap_seed',
+        bytes: seed,
+        tag: 'gap',
+        ttlSeconds: 3600,
+      );
+      final listed = await cache.listEntries(tag: 'gap');
+      expect(listed.any((e) => e.key == 'gap_seed'), isTrue);
+
+      // removeExpired: short TTL entry should be purged after expiry
+      await cache.putBytes(
+        key: 'gap_ttl',
+        bytes: Uint8List.fromList(<int>[9]),
+        tag: 'gap_ttl',
+        ttlSeconds: 1,
+      );
+      await Future<void>.delayed(const Duration(seconds: 2));
+      final expiredRemoved = await cache.removeExpired();
+      expect(expiredRemoved, greaterThanOrEqualTo(1));
+      expect(await cache.containsKey('gap_ttl'), isFalse);
+
+      // trimToSize: fill then trim hard
+      for (int i = 0; i < 20; i++) {
+        await cache.putBytes(
+          key: 'gap_trim_$i',
+          bytes: Uint8List(2048),
+          tag: 'gap_trim',
+        );
+      }
+      final trimmed = await cache.trimToSize(8 * 1024);
+      expect(trimmed, greaterThanOrEqualTo(1));
+      await cache.removeByTag('gap_trim');
+
+      if (caps.supportsFileSystemPaths) {
+        int hits = 0;
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final body = Uint8List.fromList('gap-http-body'.codeUnits);
+        server.listen((HttpRequest req) async {
+          hits++;
+          // Slow path for cancel coverage
+          if (req.uri.path.contains('slow')) {
+            await Future<void>.delayed(const Duration(seconds: 8));
+          }
+          req.response.statusCode = HttpStatus.ok;
+          req.response.add(body);
+          await req.response.close();
+        });
+
+        final base = 'http://127.0.0.1:${server.port}';
+
+        // getSingleFile + prefetch
+        final single = await cache.getSingleFile(
+          '$base/one.txt',
+          tag: 'gap_net',
+          checksumAlgorithm: CacheChecksumAlgorithm.md5,
+        );
+        expect(single.sizeBytes, body.length);
+
+        final prefetched = await cache.prefetch(
+          CacheRequest(url: '$base/two.txt', tag: 'gap_net'),
+        );
+        expect(prefetched.sizeBytes, body.length);
+
+        final many = await cache.prefetchAll(<CacheRequest>[
+          CacheRequest(url: '$base/a.txt', tag: 'gap_net'),
+          CacheRequest(url: '$base/b.txt', tag: 'gap_net'),
+        ]);
+        expect(many.length, 2);
+
+        // watchProgress should see at least one event during a fresh download
+        final progressEvents = <CacheProgressEvent>[];
+        final watchSub = cache.watchProgress('$base/prog.txt').listen(
+          progressEvents.add,
+        );
+        await cache.downloadFile(
+          CacheRequest(url: '$base/prog.txt', tag: 'gap_net', forceRefresh: true),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await watchSub.cancel();
+        expect(progressEvents, isNotEmpty);
+
+        // cancelDownload: start slow download then cancel
+        final slowUrl = '$base/slow.bin';
+        final slowFuture = cache.downloadFile(
+          CacheRequest(url: slowUrl, tag: 'gap_cancel', forceRefresh: true),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        final canceled = await cache.cancelDownload(slowUrl);
+        expect(canceled, isTrue);
+        try {
+          await slowFuture;
+        } catch (_) {
+          // Cancellation may surface as an error; that is acceptable.
+        }
+
+        await server.close(force: true);
+        expect(hits, greaterThanOrEqualTo(1));
+        await cache.removeByTag('gap_net');
+        await cache.removeByTag('gap_cancel');
+      }
+
+      await cache.clearAll(includePinned: true);
+    },
+  );
 }

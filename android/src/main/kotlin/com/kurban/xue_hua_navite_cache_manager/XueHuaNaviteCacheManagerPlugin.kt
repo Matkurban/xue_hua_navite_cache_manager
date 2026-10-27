@@ -485,13 +485,17 @@ class XueHuaNaviteCacheManagerPlugin :
             "putBytes" -> executor.execute { handlePutBytes(call, result) }
             "putFile" -> executor.execute { handlePutFile(call, result) }
             "setPinned" -> handleSetPinned(call, result)
-            "removeFile" -> handleRemoveFile(call, result)
-            "removeByTag" -> handleRemoveByTag(call, result)
-            "removeExpired" -> handleRemoveExpired(result)
-            "trimToSize" -> handleTrimToSize(call, result)
-            "clearAll" -> handleClearAll(call, result)
-            "listEntries" -> handleListEntries(call, result)
-            "getStats" -> handleGetStats(result)
+            // Bulk disk deletes must not run on the platform/UI thread: after the
+            // 1k-entry bench, clearAll removed 1000+ files inline and froze the
+            // main looper long enough for flutter_driver to lose the VM service
+            // (SetFrameSync / Service connection disposed on Clear All / Health).
+            "removeFile" -> executor.execute { handleRemoveFile(call, result) }
+            "removeByTag" -> executor.execute { handleRemoveByTag(call, result) }
+            "removeExpired" -> executor.execute { handleRemoveExpired(result) }
+            "trimToSize" -> executor.execute { handleTrimToSize(call, result) }
+            "clearAll" -> executor.execute { handleClearAll(call, result) }
+            "listEntries" -> executor.execute { handleListEntries(call, result) }
+            "getStats" -> executor.execute { handleGetStats(result) }
             "getCapabilities" -> handleGetCapabilities(result)
             else -> result.notImplemented()
         }
@@ -1249,23 +1253,24 @@ class XueHuaNaviteCacheManagerPlugin :
         val keyOrUrl = (args["keyOrUrl"] as? String) ?: ""
         val key = resolveKey(keyOrUrl)
 
-        synchronized(indexLock) {
+        val ok = synchronized(indexLock) {
             val removed = entries.remove(key)
             if (removed == null) {
-                result.success(false)
-                return
+                false
+            } else {
+                totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
+                File(removed.filePath).delete()
+                schedulePersistIndexLocked()
+                true
             }
-            totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
-            File(removed.filePath).delete()
-            schedulePersistIndexLocked()
-            result.success(true)
         }
+        mainHandler.post { result.success(ok) }
     }
 
     private fun handleRemoveByTag(call: MethodCall, result: Result) {
         val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
         val tag = (args["tag"] as? String) ?: ""
-        synchronized(indexLock) {
+        val count = synchronized(indexLock) {
             val keys = entries.values.filter { it.tag == tag }.map { it.key }
             for (k in keys) {
                 val removed = entries.remove(k)
@@ -1277,18 +1282,20 @@ class XueHuaNaviteCacheManagerPlugin :
             if (keys.isNotEmpty()) {
                 schedulePersistIndexLocked()
             }
-            result.success(keys.size)
+            keys.size
         }
+        mainHandler.post { result.success(count) }
     }
 
     private fun handleRemoveExpired(result: Result) {
-        synchronized(indexLock) {
-            val count = removeExpiredLocked()
-            if (count > 0) {
+        val count = synchronized(indexLock) {
+            val removed = removeExpiredLocked()
+            if (removed > 0) {
                 schedulePersistIndexLocked()
             }
-            result.success(count)
+            removed
         }
+        mainHandler.post { result.success(count) }
     }
 
     private fun removeExpiredLocked(): Int {
@@ -1308,13 +1315,14 @@ class XueHuaNaviteCacheManagerPlugin :
     private fun handleTrimToSize(call: MethodCall, result: Result) {
         val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
         val targetMax = (args["maxBytes"] as? Number)?.toLong() ?: maxDiskCacheBytes
-        synchronized(indexLock) {
-            val evicted = enforceQuotaLocked(targetMax, null, checkOnlyFastPath = false)
-            if (evicted > 0) {
+        val evicted = synchronized(indexLock) {
+            val count = enforceQuotaLocked(targetMax, null, checkOnlyFastPath = false)
+            if (count > 0) {
                 schedulePersistIndexLocked()
             }
-            result.success(evicted)
+            count
         }
+        mainHandler.post { result.success(evicted) }
     }
 
     private fun enforceQuotaLocked(
@@ -1366,18 +1374,31 @@ class XueHuaNaviteCacheManagerPlugin :
     private fun handleClearAll(call: MethodCall, result: Result) {
         val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
         val includePinned = (args["includePinned"] as? Boolean) ?: true
-        synchronized(indexLock) {
-            val keys = entries.values.filter { includePinned || !it.pinned }.map { it.key }
-            for (k in keys) {
-                val removed = entries.remove(k)
-                if (removed != null) {
-                    totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
-                    File(removed.filePath).delete()
+        val count = try {
+            // Drop index entries under the lock, then delete files outside it so
+            // concurrent listEntries/getStats are not blocked on disk I/O.
+            val paths = mutableListOf<String>()
+            val removedCount = synchronized(indexLock) {
+                val keys = entries.values.filter { includePinned || !it.pinned }.map { it.key }
+                for (k in keys) {
+                    val removed = entries.remove(k)
+                    if (removed != null) {
+                        totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
+                        paths.add(removed.filePath)
+                    }
                 }
+                schedulePersistIndexLocked(immediate = true)
+                keys.size
             }
-            schedulePersistIndexLocked(immediate = true)
-            result.success(keys.size)
+            for (path in paths) {
+                File(path).delete()
+            }
+            removedCount
+        } catch (e: Exception) {
+            mainHandler.post { result.error("CLEAR_ALL_FAILED", e.message, null) }
+            return
         }
+        mainHandler.post { result.success(count) }
     }
 
     private fun handleListEntries(call: MethodCall, result: Result) {
@@ -1386,18 +1407,18 @@ class XueHuaNaviteCacheManagerPlugin :
         val includeExpired = (args["includeExpired"] as? Boolean) ?: true
         val now = System.currentTimeMillis()
 
-        synchronized(indexLock) {
-            val filtered = entries.values.filter { record ->
+        val filtered = synchronized(indexLock) {
+            entries.values.filter { record ->
                 (tag == null || record.tag == tag) && (includeExpired || !record.isExpired(now))
             }.sortedByDescending { it.lastAccessedAtMs }
                 .map { it.toMap() }
-            result.success(filtered)
         }
+        mainHandler.post { result.success(filtered) }
     }
 
     private fun handleGetStats(result: Result) {
         val now = System.currentTimeMillis()
-        synchronized(indexLock) {
+        val stats = synchronized(indexLock) {
             var totalBytes = 0L
             var expiredCount = 0
             var pinnedCount = 0
@@ -1412,7 +1433,7 @@ class XueHuaNaviteCacheManagerPlugin :
             }
             totalCachedBytes = totalBytes
 
-            val stats = mapOf<String, Any?>(
+            mapOf<String, Any?>(
                 "totalEntries" to entries.size,
                 "totalBytes" to totalBytes,
                 "expiredEntries" to expiredCount,
@@ -1424,8 +1445,8 @@ class XueHuaNaviteCacheManagerPlugin :
                 "evictionCount" to evictionCount,
                 "bytesByTag" to bytesByTag
             )
-            result.success(stats)
         }
+        mainHandler.post { result.success(stats) }
     }
 
     private fun handleGetCapabilities(result: Result) {

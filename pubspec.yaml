@@ -21,10 +21,7 @@ dependencies:
     sdk: flutter
   flutter_web_plugins:
     sdk: flutter
-  # Standalone Material library. package:flutter/material.dart is deprecated
-  # as of Flutter 3.47. ^1.0.0 keeps that minimum SDK resolvable; apps on a
-  # newer material_ui (the example uses ^1.8.0) still solve inside 1.x.
-  material_ui: ^1.0.0
+  material_ui: ^1.9.0
   web: ^1.1.2
   plugin_platform_interface: ^2.1.8
 

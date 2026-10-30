@@ -284,9 +284,13 @@ class CachedNetworkImage extends StatelessWidget {
                     ? width! / aspectRatio
                     : (naturalHeight ?? 100.0)));
 
-      result = LimitedBox(
-        maxWidth: fallbackWidth,
-        maxHeight: fallbackHeight,
+      result = ConstrainedBox(
+        constraints: BoxConstraints(
+          minWidth: hasOwnBoundedWidth ? 0.0 : fallbackWidth,
+          maxWidth: fallbackWidth,
+          minHeight: hasOwnBoundedHeight ? 0.0 : fallbackHeight,
+          maxHeight: fallbackHeight,
+        ),
         child: result,
       );
     }

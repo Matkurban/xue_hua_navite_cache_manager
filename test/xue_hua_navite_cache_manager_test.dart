@@ -817,9 +817,12 @@ void main() {
       // Codec resolution touches real file IO and root-zone futures, which
       // pumpAndSettle's fake async clock does not flush on its own.
       await tester.pump();
-      await tester.runAsync(() async {
-        await Future<void>.delayed(const Duration(milliseconds: 80));
-      });
+      for (int i = 0; i < 15; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+      }
       await tester.pumpAndSettle();
 
       expect(find.byType(CachedNetworkImage), findsNWidgets(5));

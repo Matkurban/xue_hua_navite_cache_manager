@@ -867,6 +867,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                         tag: 'gallery',
                         pinned: index == 1,
                         memCacheWidth: 360,
+                        borderRadius: BorderRadius.circular(12),
                         fit: BoxFit.cover,
                         imageBuilder: isCircleDemo
                             ? (context, provider) => Center(
@@ -910,7 +911,7 @@ class _CacheWorkbenchPageState extends State<CacheWorkbenchPage> {
                             ),
                           );
                         },
-                        errorWidget: (context, url, error, stackTrace) {
+                        errorBuilder: (context, url, error, stackTrace) {
                           return const Center(
                             child: Column(
                               mainAxisSize: MainAxisSize.min,

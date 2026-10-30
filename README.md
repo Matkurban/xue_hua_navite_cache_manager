@@ -46,7 +46,7 @@ Add `xue_hua_navite_cache_manager` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  xue_hua_navite_cache_manager: ^1.1.0
+  xue_hua_navite_cache_manager: ^1.2.0
 ```
 
 ### Android
@@ -89,6 +89,7 @@ CachedNetworkImage(
   tag: 'wildlife',
   width: 200,
   height: 200,
+  borderRadius: BorderRadius.circular(12),
   memCacheWidth: 400, // Downsamples in C++ codec to prevent UI jank
   fit: BoxFit.cover,
   progressIndicatorBuilder: (context, url, progress) {
@@ -98,7 +99,7 @@ CachedNetworkImage(
         : null;
     return Center(child: CircularProgressIndicator(value: ratio));
   },
-  errorWidget: (context, url, error, stackTrace) =>
+  errorBuilder: (context, url, error, stackTrace) =>
       const Center(child: Icon(Icons.broken_image_outlined)),
 );
 

@@ -1,3 +1,12 @@
+## 1.2.0
+
+* Added high-performance `borderRadius` support (`BorderRadiusGeometry?`) to `CachedNetworkImage`. Rounded corners are rendered directly on the canvas via a custom leaf `RenderBox` (`ui.ImageShader` + `Canvas.drawRRect` single-pass GPU draw call with shader caching) without allocating heavyweight `ClipRRect` / `Container` widgets, `ClipRRectLayer` compositing layers, or `saveLayer` offscreen buffers during fade-in transitions.
+* Fixed `CachedNetworkImage.imageBuilder` rendering blank (`0x0` layout collapse) when returning a childless `Container` with `BoxDecoration(image: DecorationImage(image: imageProvider))`:
+  * Preserved `CachedNetworkImage`'s `width` and `height` constraints on the `imageBuilder` subtree and added decoded `ui.Image` intrinsic-dimension `LimitedBox` fallbacks when placed inside unbounded parents (`Column`, `Row`, `ListView`, `SingleChildScrollView`).
+  * Shared active `ImageStreamCompleter` instances in `CachedNetworkImageProvider` while mounted so `DecorationImage` inside `imageBuilder` resolves synchronously from the already-decoded frame without duplicate decoding or network requests.
+  * Prevented late asynchronous `chunkEvents` from overriding `loadingBuilder` after the first frame has decoded, and ensured fade-in animations paint on frame 0 so `RenderDecoratedBox` resolves `DecorationImage` immediately.
+* **Breaking Change**: Renamed `CachedNetworkImage.errorWidget` to `CachedNetworkImage.errorBuilder` to align with Flutter's `Image.errorBuilder` naming convention.
+
 ## 1.1.6
 
 * Example Fetch, preset, and gallery URLs no longer use `flutter.github.io` or `picsum.photos`. Android API 24 rejects those certificate chains (`CertPathValidatorException: Trust anchor`). Default Fetch is `https://httpbin.org/image/jpeg`, sample images are `https://www.gstatic.com/webp/gallery/1.jpg` and `2.jpg`, the sample video is `https://filesamples.com/samples/video/mp4/sample_640x360.mp4`, and the other gallery slots are distinct `https://placehold.co/` JPEGs.

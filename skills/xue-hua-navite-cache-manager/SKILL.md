@@ -4,7 +4,7 @@ description: Use when the user is working with xue_hua_navite_cache_manager APIs
 ---
 # xue-hua-navite-cache-manager
 
-Provide idiomatic integration patterns, zero-jank image rendering guidelines, platform setup rules, and best practices for the `xue_hua_navite_cache_manager` Flutter plugin (`v1.1.1+`) across Android, iOS, macOS, Windows, Linux, and Web.
+Provide idiomatic integration patterns, zero-jank image rendering guidelines, platform setup rules, and best practices for the `xue_hua_navite_cache_manager` Flutter plugin (`v1.2.0+`) across Android, iOS, macOS, Windows, Linux, and Web.
 
 ## When to Use
 
@@ -49,6 +49,7 @@ class UserAvatarCard extends StatelessWidget {
       tag: 'avatars',
       width: 120,
       height: 120,
+      borderRadius: BorderRadius.circular(12),
       memCacheWidth: 240, // Downsample in C++ codec to prevent UI jank
       fit: BoxFit.cover,
       progressIndicatorBuilder: (context, url, progress) {
@@ -58,7 +59,7 @@ class UserAvatarCard extends StatelessWidget {
             : null;
         return Center(child: CircularProgressIndicator(value: value));
       },
-      errorWidget: (context, url, error, stackTrace) =>
+      errorBuilder: (context, url, error, stackTrace) =>
           const Icon(Icons.broken_image_outlined),
     );
   }

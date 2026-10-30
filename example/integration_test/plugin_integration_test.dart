@@ -275,11 +275,15 @@ void main() {
 
         // watchProgress should see at least one event during a fresh download
         final progressEvents = <CacheProgressEvent>[];
-        final watchSub = cache.watchProgress('$base/prog.txt').listen(
-          progressEvents.add,
-        );
+        final watchSub = cache
+            .watchProgress('$base/prog.txt')
+            .listen(progressEvents.add);
         await cache.downloadFile(
-          CacheRequest(url: '$base/prog.txt', tag: 'gap_net', forceRefresh: true),
+          CacheRequest(
+            url: '$base/prog.txt',
+            tag: 'gap_net',
+            forceRefresh: true,
+          ),
         );
         await Future<void>.delayed(const Duration(milliseconds: 300));
         await watchSub.cancel();

@@ -44,7 +44,7 @@
 
 ```yaml
 dependencies:
-  xue_hua_navite_cache_manager: ^1.1.0
+  xue_hua_navite_cache_manager: ^1.2.0
 ```
 
 ### Android 配置
@@ -87,6 +87,7 @@ CachedNetworkImage(
   tag: 'wildlife',
   width: 200,
   height: 200,
+  borderRadius: BorderRadius.circular(12),
   memCacheWidth: 400, // 在 C++ 解码层直接按 400px 宽度降采样，防止大图卡顿
   fit: BoxFit.cover,
   progressIndicatorBuilder: (context, url, progress) {
@@ -96,7 +97,7 @@ CachedNetworkImage(
         : null;
     return Center(child: CircularProgressIndicator(value: ratio));
   },
-  errorWidget: (context, url, error, stackTrace) =>
+  errorBuilder: (context, url, error, stackTrace) =>
       const Center(child: Icon(Icons.broken_image_outlined)),
 );
 

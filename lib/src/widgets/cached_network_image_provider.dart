@@ -37,6 +37,12 @@ class CachedNetworkImageProvider
     this.errorListener,
   });
 
+  /// Active completers currently held by mounted widgets (e.g. when both
+  /// [CachedNetworkImage] and an `imageBuilder` [DecorationImage] resolve the
+  /// same provider simultaneously).
+  static final Map<CachedNetworkImageProvider, ImageStreamCompleter>
+  _activeCompleters = <CachedNetworkImageProvider, ImageStreamCompleter>{};
+
   /// Remote HTTP or HTTPS URL of the image.
   final String url;
 
@@ -94,10 +100,16 @@ class CachedNetworkImageProvider
     CachedNetworkImageProvider key,
     ImageDecoderCallback decode,
   ) {
+    final ImageStreamCompleter? existing = _activeCompleters[key];
+    if (existing != null) {
+      return existing;
+    }
+
     final StreamController<ImageChunkEvent> chunkEvents =
         StreamController<ImageChunkEvent>();
 
-    return MultiFrameImageStreamCompleter(
+    late final MultiFrameImageStreamCompleter completer;
+    completer = MultiFrameImageStreamCompleter(
       codec: _loadAsync(key, chunkEvents, decode),
       chunkEvents: chunkEvents.stream,
       scale: key.scale,
@@ -107,6 +119,15 @@ class CachedNetworkImageProvider
         DiagnosticsProperty<CachedNetworkImageProvider>('Image key', key),
       ],
     );
+
+    _activeCompleters[key] = completer;
+    completer.addOnLastListenerRemovedCallback(() {
+      if (identical(_activeCompleters[key], completer)) {
+        _activeCompleters.remove(key);
+      }
+    });
+
+    return completer;
   }
 
   Future<ui.Codec> _loadAsync(
@@ -116,41 +137,15 @@ class CachedNetworkImageProvider
   ) async {
     final manager = key.cacheManager ?? XueHuaNaviteCacheManager.instance;
     StreamSubscription<CacheProgressEvent>? progressSub;
+    bool isDecodingStarted = false;
 
     try {
-      // Subscribe to progress events (both cacheHit and network inProgress)
-      progressSub = manager.watchProgress(key.cacheKey ?? key.url).listen((
-        event,
-      ) {
-        if (!chunkEvents.isClosed &&
-            (event.state == CacheTransferState.inProgress ||
-                event.state == CacheTransferState.completed ||
-                event.state == CacheTransferState.cacheHit) &&
-            event.bytesReceived >= 0) {
-          chunkEvents.add(
-            ImageChunkEvent(
-              cumulativeBytesLoaded: event.bytesReceived,
-              expectedTotalBytes: event.totalBytes > 0
-                  ? event.totalBytes
-                  : null,
-            ),
-          );
-        }
-      });
-
       // Fast-path: check if a valid non-expired file already exists in local cache
       if (!key.forceRefresh) {
         final lookupKey = key.cacheKey ?? key.url;
         final cached = await manager.getFileFromCache(lookupKey);
         if (cached != null) {
-          if (!chunkEvents.isClosed && cached.sizeBytes > 0) {
-            chunkEvents.add(
-              ImageChunkEvent(
-                cumulativeBytesLoaded: cached.sizeBytes,
-                expectedTotalBytes: cached.sizeBytes,
-              ),
-            );
-          }
+          isDecodingStarted = true;
           if (!kIsWeb && cached.filePath.isNotEmpty) {
             try {
               return await loadFileImageCodec(
@@ -172,8 +167,29 @@ class CachedNetworkImageProvider
               maxHeight: key.maxHeight,
             );
           }
+          isDecodingStarted = false;
         }
       }
+
+      // Subscribe to in-flight network download progress events prior to decoding
+      progressSub = manager.watchProgress(key.cacheKey ?? key.url).listen((
+        event,
+      ) {
+        if (!isDecodingStarted &&
+            !chunkEvents.isClosed &&
+            (event.state == CacheTransferState.started ||
+                event.state == CacheTransferState.inProgress) &&
+            event.bytesReceived >= 0) {
+          chunkEvents.add(
+            ImageChunkEvent(
+              cumulativeBytesLoaded: event.bytesReceived,
+              expectedTotalBytes: event.totalBytes > 0
+                  ? event.totalBytes
+                  : null,
+            ),
+          );
+        }
+      });
 
       final result = await manager.downloadFile(
         CacheRequest(
@@ -189,6 +205,12 @@ class CachedNetworkImageProvider
           expectedChecksum: key.expectedChecksum,
         ),
       );
+
+      // Stop emitting progress events before decoding starts so asynchronous
+      // chunk events never arrive after the decoded frame is delivered.
+      isDecodingStarted = true;
+      await progressSub.cancel();
+      progressSub = null;
 
       if (!kIsWeb && result.filePath.isNotEmpty) {
         try {
@@ -215,6 +237,7 @@ class CachedNetworkImageProvider
         maxHeight: key.maxHeight,
       );
     } catch (error) {
+      _activeCompleters.remove(key);
       scheduleMicrotask(() {
         PaintingBinding.instance.imageCache.evict(key);
       });
@@ -229,6 +252,7 @@ class CachedNetworkImageProvider
   /// Evicts this image provider from Flutter's in-memory [ImageCache] and optionally
   /// removes the underlying file from [XueHuaNaviteCacheManager].
   Future<bool> evictFromCache({bool removeDiskCache = false}) async {
+    _activeCompleters.remove(this);
     final memoryEvicted = await super.evict();
     if (removeDiskCache) {
       final manager = cacheManager ?? XueHuaNaviteCacheManager.instance;

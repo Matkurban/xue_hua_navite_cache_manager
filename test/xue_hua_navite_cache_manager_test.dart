@@ -715,12 +715,14 @@ void main() {
   );
 
   testWidgets(
-    'CachedNetworkImage and CachedNetworkImageProvider render image, custom imageBuilder, and errorWidget cleanly',
+    'CachedNetworkImage and CachedNetworkImageProvider render image, borderRadius, custom imageBuilder (Container + DecorationImage), and errorBuilder cleanly',
     (WidgetTester tester) async {
       final mock = FullMockCachePlatform();
       XueHuaNaviteCacheManagerPlatform.instance = mock;
 
       const testImageUrl = 'https://example.com/avatar.png';
+      const roundedImageUrl = 'https://example.com/rounded.png';
+      const builderImageUrl = 'https://example.com/builder_deco.png';
       const brokenUrl = 'https://example.com/broken_url.png';
 
       // Verify provider equality and hashCode
@@ -739,30 +741,74 @@ void main() {
       expect(p1, equals(p2));
       expect(p1.hashCode, equals(p2.hashCode));
 
+      final GlobalKey decoWithSizeKey = GlobalKey();
+      final GlobalKey decoUnboundedKey = GlobalKey();
+      final GlobalKey roundedKey = GlobalKey();
+
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: Column(
-              children: <Widget>[
-                CachedNetworkImage(
-                  imageUrl: testImageUrl,
-                  cacheKey: 'avatar_1',
-                  tag: 'avatars',
-                  width: 100,
-                  height: 100,
-                  memCacheWidth: 100,
-                  memCacheHeight: 100,
-                  placeholder: (context, url) =>
-                      const Text('Loading Placeholder'),
-                ),
-                CachedNetworkImage(
-                  imageUrl: brokenUrl,
-                  width: 100,
-                  height: 100,
-                  errorWidget: (context, url, error, stack) =>
-                      const Text('Custom Error Fallback'),
-                ),
-              ],
+            body: SingleChildScrollView(
+              child: Column(
+                children: <Widget>[
+                  CachedNetworkImage(
+                    imageUrl: testImageUrl,
+                    cacheKey: 'avatar_1',
+                    tag: 'avatars',
+                    width: 100,
+                    height: 100,
+                    memCacheWidth: 100,
+                    memCacheHeight: 100,
+                    placeholder: (context, url) =>
+                        const Text('Loading Placeholder'),
+                  ),
+                  CachedNetworkImage(
+                    key: roundedKey,
+                    imageUrl: roundedImageUrl,
+                    cacheKey: 'rounded_1',
+                    width: 96,
+                    height: 96,
+                    borderRadius: BorderRadius.circular(16),
+                    fit: BoxFit.cover,
+                  ),
+                  CachedNetworkImage(
+                    key: decoWithSizeKey,
+                    imageUrl: builderImageUrl,
+                    cacheKey: 'builder_1',
+                    width: 120,
+                    height: 80,
+                    imageBuilder: (context, imageProvider) => Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        image: DecorationImage(
+                          image: imageProvider,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                  ),
+                  CachedNetworkImage(
+                    key: decoUnboundedKey,
+                    imageUrl: builderImageUrl,
+                    cacheKey: 'builder_1',
+                    imageBuilder: (context, imageProvider) => Container(
+                      decoration: BoxDecoration(
+                        image: DecorationImage(
+                          image: imageProvider,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                  ),
+                  CachedNetworkImage(
+                    imageUrl: brokenUrl,
+                    width: 100,
+                    height: 100,
+                    errorBuilder: (context, url, error, stack) =>
+                        const Text('Custom Error Fallback'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -772,12 +818,30 @@ void main() {
       // pumpAndSettle's fake async clock does not flush on its own.
       await tester.pump();
       await tester.runAsync(() async {
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+        await Future<void>.delayed(const Duration(milliseconds: 80));
       });
       await tester.pumpAndSettle();
 
-      expect(find.byType(CachedNetworkImage), findsNWidgets(2));
+      expect(find.byType(CachedNetworkImage), findsNWidgets(5));
       expect(find.text('Custom Error Fallback'), findsOneWidget);
+
+      // Verify borderRadius renders without inflating a ClipRRect widget
+      expect(
+        find.descendant(
+          of: find.byKey(roundedKey),
+          matching: find.byType(ClipRRect),
+        ),
+        findsNothing,
+      );
+      expect(tester.getSize(find.byKey(roundedKey)), const Size(96, 96));
+
+      // Verify imageBuilder returning Container(decoration: BoxDecoration(image: DecorationImage(...)))
+      // retains non-zero layout dimensions and resolves its DecorationImage
+      expect(tester.getSize(find.byKey(decoWithSizeKey)), const Size(120, 80));
+      final Size unboundedSize = tester.getSize(find.byKey(decoUnboundedKey));
+      expect(unboundedSize.width, greaterThan(0));
+      expect(unboundedSize.height, greaterThan(0));
+
       expect(
         await XueHuaNaviteCacheManager.instance.containsKey('avatar_1'),
         isTrue,

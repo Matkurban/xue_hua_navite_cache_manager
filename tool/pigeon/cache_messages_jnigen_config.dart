@@ -3,6 +3,7 @@
 // ignore_for_file: avoid_print, depend_on_referenced_packages
 
 import 'dart:io';
+
 import 'package:jnigen/jnigen.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as path;
@@ -39,28 +40,28 @@ void main() async {
       ),
       backend: SummarizerBackend.asm,
       classPath: [Uri.directory('build/app/tmp/kotlin-classes/release')],
-
     ),
     output: Output(
       dart: DartOutput(
         path: Uri.file('lib/src/pigeon/cache_messages.g.jni.dart'),
         structure: OutputStructure.singleFile,
       ),
-
     ),
   );
   await generator.generate(logger: Logger.root..level = Level.ALL);
-
 }
+
 Future<bool> _hasJava() async {
   final String? javaHome = Platform.environment['JAVA_HOME'];
-  final String javaExecutable =
-      javaHome != null && javaHome.isNotEmpty ? path.join(javaHome, 'bin', 'java') : 'java';
+  final String javaExecutable = javaHome != null && javaHome.isNotEmpty
+      ? path.join(javaHome, 'bin', 'java')
+      : 'java';
   try {
-    final ProcessResult result = await Process.run(javaExecutable, <String>['-version']);
+    final ProcessResult result = await Process.run(javaExecutable, <String>[
+      '-version',
+    ]);
     return result.exitCode == 0;
   } catch (_) {
     return false;
   }
 }
-

@@ -6,13 +6,15 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io' show Platform;
-import 'dart:typed_data' show Float32List, Float64List, Int32List, Int64List, Int8List, TypedData;
+import 'dart:typed_data'
+    show Float32List, Float64List, Int32List, Int64List, Int8List, TypedData;
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart';
 import 'package:jni/jni.dart';
 import 'package:objective_c/objective_c.dart';
+
 import './cache_messages.g.dart';
 import './cache_messages.g.ffi.dart' as ffi_bridge;
 import './cache_messages.g.jni.dart' as jni_bridge;
@@ -23,7 +25,9 @@ Uint8List? _jByteArrayToDart(JByteArray? array, {bool release = false}) {
   }
   try {
     final Int8List range = array.getRange(0, array.length);
-    return Uint8List.fromList(range.buffer.asUint8List(range.offsetInBytes, range.length));
+    return Uint8List.fromList(
+      range.buffer.asUint8List(range.offsetInBytes, range.length),
+    );
   } finally {
     if (release) {
       array.release();
@@ -72,7 +76,11 @@ Float64List? _jDoubleArrayToDart(JDoubleArray? array, {bool release = false}) {
 
 JByteArray _uint8ListToJni(Uint8List value) {
   final JByteArray array = JByteArray(value.length);
-  array.setRange(0, value.length, Int8List.view(value.buffer, value.offsetInBytes, value.length));
+  array.setRange(
+    0,
+    value.length,
+    Int8List.view(value.buffer, value.offsetInBytes, value.length),
+  );
   return array;
 }
 
@@ -118,17 +126,28 @@ class _PigeonJniCodec {
   static final JClass _listClass = JList.type.jClass;
   static final JClass _mapClass = JMap.type.jClass;
 
-  static final JClass _classWireCacheManagerConfig = jni_bridge.WireCacheManagerConfig.type.jClass;
-  static final JClass _classWireCacheRequest = jni_bridge.WireCacheRequest.type.jClass;
-  static final JClass _classWireCacheEntry = jni_bridge.WireCacheEntry.type.jClass;
-  static final JClass _classWireCacheFetchResult = jni_bridge.WireCacheFetchResult.type.jClass;
-  static final JClass _classWireCacheProgressEvent = jni_bridge.WireCacheProgressEvent.type.jClass;
-  static final JClass _classWireCacheStats = jni_bridge.WireCacheStats.type.jClass;
-  static final JClass _classWireCachePlatformCapabilities = jni_bridge.WireCachePlatformCapabilities.type.jClass;
-  static final JClass _classWireCacheChecksumAlgorithm = jni_bridge.WireCacheChecksumAlgorithm.type.jClass;
-  static final JClass _classWireCacheEvictionPolicy = jni_bridge.WireCacheEvictionPolicy.type.jClass;
-  static final JClass _classWireCacheResultSource = jni_bridge.WireCacheResultSource.type.jClass;
-  static final JClass _classWireCacheTransferState = jni_bridge.WireCacheTransferState.type.jClass;
+  static final JClass _classWireCacheManagerConfig =
+      jni_bridge.WireCacheManagerConfig.type.jClass;
+  static final JClass _classWireCacheRequest =
+      jni_bridge.WireCacheRequest.type.jClass;
+  static final JClass _classWireCacheEntry =
+      jni_bridge.WireCacheEntry.type.jClass;
+  static final JClass _classWireCacheFetchResult =
+      jni_bridge.WireCacheFetchResult.type.jClass;
+  static final JClass _classWireCacheProgressEvent =
+      jni_bridge.WireCacheProgressEvent.type.jClass;
+  static final JClass _classWireCacheStats =
+      jni_bridge.WireCacheStats.type.jClass;
+  static final JClass _classWireCachePlatformCapabilities =
+      jni_bridge.WireCachePlatformCapabilities.type.jClass;
+  static final JClass _classWireCacheChecksumAlgorithm =
+      jni_bridge.WireCacheChecksumAlgorithm.type.jClass;
+  static final JClass _classWireCacheEvictionPolicy =
+      jni_bridge.WireCacheEvictionPolicy.type.jClass;
+  static final JClass _classWireCacheResultSource =
+      jni_bridge.WireCacheResultSource.type.jClass;
+  static final JClass _classWireCacheTransferState =
+      jni_bridge.WireCacheTransferState.type.jClass;
   static Object? readValue(JObject? value) {
     if (value == null) {
       return null;
@@ -161,7 +180,8 @@ class _PigeonJniCodec {
       }
       return res;
     } else if (value.isInstanceOf(_mapClass)) {
-      final Map<JObject?, JObject?> map = (value as JMap<JObject?, JObject?>).asDart();
+      final Map<JObject?, JObject?> map = (value as JMap<JObject?, JObject?>)
+          .asDart();
       final res = <Object?, Object?>{};
       for (final MapEntry<JObject?, JObject?> entry in map.entries) {
         final JObject? key = entry.key;
@@ -171,32 +191,52 @@ class _PigeonJniCodec {
         entryValue?.release();
       }
       return res;
-          } else if (value.isInstanceOf(_classWireCacheManagerConfig)) {
-      return PigeonInternalWireCacheManagerConfigNativeInterop.fromJni(value as jni_bridge.WireCacheManagerConfig);
-              } else if (value.isInstanceOf(_classWireCacheRequest)) {
-      return PigeonInternalWireCacheRequestNativeInterop.fromJni(value as jni_bridge.WireCacheRequest);
-              } else if (value.isInstanceOf(_classWireCacheEntry)) {
-      return PigeonInternalWireCacheEntryNativeInterop.fromJni(value as jni_bridge.WireCacheEntry);
-              } else if (value.isInstanceOf(_classWireCacheFetchResult)) {
-      return PigeonInternalWireCacheFetchResultNativeInterop.fromJni(value as jni_bridge.WireCacheFetchResult);
-              } else if (value.isInstanceOf(_classWireCacheProgressEvent)) {
-      return PigeonInternalWireCacheProgressEventNativeInterop.fromJni(value as jni_bridge.WireCacheProgressEvent);
-              } else if (value.isInstanceOf(_classWireCacheStats)) {
-      return PigeonInternalWireCacheStatsNativeInterop.fromJni(value as jni_bridge.WireCacheStats);
-              } else if (value.isInstanceOf(_classWireCachePlatformCapabilities)) {
-      return PigeonInternalWireCachePlatformCapabilitiesNativeInterop.fromJni(value as jni_bridge.WireCachePlatformCapabilities);
-        
-          } else if (value.isInstanceOf(_classWireCacheChecksumAlgorithm)) {
-      return PigeonInternalWireCacheChecksumAlgorithmNativeInterop.fromJni(value as jni_bridge.WireCacheChecksumAlgorithm);
-              } else if (value.isInstanceOf(_classWireCacheEvictionPolicy)) {
-      return PigeonInternalWireCacheEvictionPolicyNativeInterop.fromJni(value as jni_bridge.WireCacheEvictionPolicy);
-              } else if (value.isInstanceOf(_classWireCacheResultSource)) {
-      return PigeonInternalWireCacheResultSourceNativeInterop.fromJni(value as jni_bridge.WireCacheResultSource);
-              } else if (value.isInstanceOf(_classWireCacheTransferState)) {
-      return PigeonInternalWireCacheTransferStateNativeInterop.fromJni(value as jni_bridge.WireCacheTransferState);
-        
+    } else if (value.isInstanceOf(_classWireCacheManagerConfig)) {
+      return PigeonInternalWireCacheManagerConfigNativeInterop.fromJni(
+        value as jni_bridge.WireCacheManagerConfig,
+      );
+    } else if (value.isInstanceOf(_classWireCacheRequest)) {
+      return PigeonInternalWireCacheRequestNativeInterop.fromJni(
+        value as jni_bridge.WireCacheRequest,
+      );
+    } else if (value.isInstanceOf(_classWireCacheEntry)) {
+      return PigeonInternalWireCacheEntryNativeInterop.fromJni(
+        value as jni_bridge.WireCacheEntry,
+      );
+    } else if (value.isInstanceOf(_classWireCacheFetchResult)) {
+      return PigeonInternalWireCacheFetchResultNativeInterop.fromJni(
+        value as jni_bridge.WireCacheFetchResult,
+      );
+    } else if (value.isInstanceOf(_classWireCacheProgressEvent)) {
+      return PigeonInternalWireCacheProgressEventNativeInterop.fromJni(
+        value as jni_bridge.WireCacheProgressEvent,
+      );
+    } else if (value.isInstanceOf(_classWireCacheStats)) {
+      return PigeonInternalWireCacheStatsNativeInterop.fromJni(
+        value as jni_bridge.WireCacheStats,
+      );
+    } else if (value.isInstanceOf(_classWireCachePlatformCapabilities)) {
+      return PigeonInternalWireCachePlatformCapabilitiesNativeInterop.fromJni(
+        value as jni_bridge.WireCachePlatformCapabilities,
+      );
+    } else if (value.isInstanceOf(_classWireCacheChecksumAlgorithm)) {
+      return PigeonInternalWireCacheChecksumAlgorithmNativeInterop.fromJni(
+        value as jni_bridge.WireCacheChecksumAlgorithm,
+      );
+    } else if (value.isInstanceOf(_classWireCacheEvictionPolicy)) {
+      return PigeonInternalWireCacheEvictionPolicyNativeInterop.fromJni(
+        value as jni_bridge.WireCacheEvictionPolicy,
+      );
+    } else if (value.isInstanceOf(_classWireCacheResultSource)) {
+      return PigeonInternalWireCacheResultSourceNativeInterop.fromJni(
+        value as jni_bridge.WireCacheResultSource,
+      );
+    } else if (value.isInstanceOf(_classWireCacheTransferState)) {
+      return PigeonInternalWireCacheTransferStateNativeInterop.fromJni(
+        value as jni_bridge.WireCacheTransferState,
+      );
     } else {
-    throw ArgumentError.value(value);
+      throw ArgumentError.value(value);
     }
   }
 
@@ -221,82 +261,104 @@ class _PigeonJniCodec {
       return _int64ListToJni(value) as T;
     } else if (value is Float64List) {
       return _float64ListToJni(value) as T;
-        } else if (value is List<WireCacheRequest>) {
+    } else if (value is List<WireCacheRequest>) {
       return value
-          .map<jni_bridge.WireCacheRequest>((e) => writeValue<jni_bridge.WireCacheRequest>(e))
-          .toJList() as T;
-            } else if (value is List<WireCacheEntry>) {
+              .map<jni_bridge.WireCacheRequest>(
+                (e) => writeValue<jni_bridge.WireCacheRequest>(e),
+              )
+              .toJList()
+          as T;
+    } else if (value is List<WireCacheEntry>) {
       return value
-          .map<jni_bridge.WireCacheEntry>((e) => writeValue<jni_bridge.WireCacheEntry>(e))
-          .toJList() as T;
-        
+              .map<jni_bridge.WireCacheEntry>(
+                (e) => writeValue<jni_bridge.WireCacheEntry>(e),
+              )
+              .toJList()
+          as T;
     } else if (value is List<Object>) {
       return value.map<JObject>((e) => writeValue<JObject>(e)).toJList() as T;
     } else if (value is List) {
       return value.map<JObject?>((e) => writeValue<JObject?>(e)).toJList() as T;
-        } else if (value is Map<String, int>) {
+    } else if (value is Map<String, int>) {
       return value
-          .map<JString, JLong>(
-              (k, v) => MapEntry(writeValue<JString>(k), writeValue<JLong>(v)))
-          .toJMap() as T;
-            } else if (value is Map<String, String>) {
+              .map<JString, JLong>(
+                (k, v) =>
+                    MapEntry(writeValue<JString>(k), writeValue<JLong>(v)),
+              )
+              .toJMap()
+          as T;
+    } else if (value is Map<String, String>) {
       return value
-          .map<JString, JString>(
-              (k, v) => MapEntry(writeValue<JString>(k), writeValue<JString>(v)))
-          .toJMap() as T;
-        
+              .map<JString, JString>(
+                (k, v) =>
+                    MapEntry(writeValue<JString>(k), writeValue<JString>(v)),
+              )
+              .toJMap()
+          as T;
     } else if (value is Map<Object, Object>) {
       return value
-          .map<JObject, JObject>((k, v) =>
-              MapEntry(writeValue<JObject>(k), writeValue<JObject>(v)))
-          .toJMap() as T;
+              .map<JObject, JObject>(
+                (k, v) =>
+                    MapEntry(writeValue<JObject>(k), writeValue<JObject>(v)),
+              )
+              .toJMap()
+          as T;
     } else if (value is Map<Object, Object?>) {
       return value
-          .map<JObject, JObject?>((k, v) =>
-              MapEntry(writeValue<JObject>(k), writeValue<JObject?>(v)))
-          .toJMap() as T;
+              .map<JObject, JObject?>(
+                (k, v) =>
+                    MapEntry(writeValue<JObject>(k), writeValue<JObject?>(v)),
+              )
+              .toJMap()
+          as T;
     } else if (value is Map) {
       return value
-          .map<JObject?, JObject?>((k, v) =>
-              MapEntry(writeValue<JObject?>(k), writeValue<JObject?>(v)))
-          .toJMap() as T;
-          } else if (value is WireCacheManagerConfig) {
-        return value.toJni() as T;
-              } else if (value is WireCacheRequest) {
-        return value.toJni() as T;
-              } else if (value is WireCacheEntry) {
-        return value.toJni() as T;
-              } else if (value is WireCacheFetchResult) {
-        return value.toJni() as T;
-              } else if (value is WireCacheProgressEvent) {
-        return value.toJni() as T;
-              } else if (value is WireCacheStats) {
-        return value.toJni() as T;
-              } else if (value is WireCachePlatformCapabilities) {
-        return value.toJni() as T;
-        
-          } else if (value is WireCacheChecksumAlgorithm) {
-        return value.toJni() as T;
-              } else if (value is WireCacheEvictionPolicy) {
-        return value.toJni() as T;
-              } else if (value is WireCacheResultSource) {
-        return value.toJni() as T;
-              } else if (value is WireCacheTransferState) {
-        return value.toJni() as T;
-        
+              .map<JObject?, JObject?>(
+                (k, v) =>
+                    MapEntry(writeValue<JObject?>(k), writeValue<JObject?>(v)),
+              )
+              .toJMap()
+          as T;
+    } else if (value is WireCacheManagerConfig) {
+      return value.toJni() as T;
+    } else if (value is WireCacheRequest) {
+      return value.toJni() as T;
+    } else if (value is WireCacheEntry) {
+      return value.toJni() as T;
+    } else if (value is WireCacheFetchResult) {
+      return value.toJni() as T;
+    } else if (value is WireCacheProgressEvent) {
+      return value.toJni() as T;
+    } else if (value is WireCacheStats) {
+      return value.toJni() as T;
+    } else if (value is WireCachePlatformCapabilities) {
+      return value.toJni() as T;
+    } else if (value is WireCacheChecksumAlgorithm) {
+      return value.toJni() as T;
+    } else if (value is WireCacheEvictionPolicy) {
+      return value.toJni() as T;
+    } else if (value is WireCacheResultSource) {
+      return value.toJni() as T;
+    } else if (value is WireCacheTransferState) {
+      return value.toJni() as T;
     } else {
-    throw ArgumentError.value(value);
+      throw ArgumentError.value(value);
     }
   }
-    
 }
 
 // ignore: unused_element
 class _PigeonJniBuffers {
   static JByteArray encode(Object? value) {
-    final ByteData data = pigeon_CacheMessagesmessageCodec.encodeMessage(value)!;
+    final ByteData data = pigeon_CacheMessagesmessageCodec.encodeMessage(
+      value,
+    )!;
     final JByteArray array = JByteArray(data.lengthInBytes);
-    array.setRange(0, data.lengthInBytes, data.buffer.asInt8List(data.offsetInBytes, data.lengthInBytes));
+    array.setRange(
+      0,
+      data.lengthInBytes,
+      data.buffer.asInt8List(data.offsetInBytes, data.lengthInBytes),
+    );
     return array;
   }
 
@@ -306,10 +368,13 @@ class _PigeonJniBuffers {
 
   static Object? decode(JByteArray? array) {
     final Uint8List? bytes = _jByteArrayToDart(array, release: true);
-    return bytes == null ? null : pigeon_CacheMessagesmessageCodec.decodeMessage(ByteData.sublistView(bytes));
+    return bytes == null
+        ? null
+        : pigeon_CacheMessagesmessageCodec.decodeMessage(
+            ByteData.sublistView(bytes),
+          );
   }
 }
-
 
 // ignore: unused_element
 class _PigeonFfiCodec {
@@ -318,7 +383,8 @@ class _PigeonFfiCodec {
   }
 
   static Object? readValue(ObjCObject? value, [Type? type, Type? type2]) {
-    if (value == null || ffi_bridge.CacheMessagesPigeonInternalNull.isA(value)) {
+    if (value == null ||
+        ffi_bridge.CacheMessagesPigeonInternalNull.isA(value)) {
       return null;
     } else if (NSNumber.isA(value)) {
       final NSNumber numValue = NSNumber.as(value);
@@ -326,25 +392,31 @@ class _PigeonFfiCodec {
         return numValue.doubleValue;
       } else if (type == bool) {
         return numValue.boolValue;
-      }
-            else if (type == WireCacheChecksumAlgorithm) {
-        return PigeonInternalWireCacheChecksumAlgorithmNativeInterop.fromNSNumber(numValue);
-      }
-      else if (type == WireCacheEvictionPolicy) {
-        return PigeonInternalWireCacheEvictionPolicyNativeInterop.fromNSNumber(numValue);
-      }
-      else if (type == WireCacheResultSource) {
-        return PigeonInternalWireCacheResultSourceNativeInterop.fromNSNumber(numValue);
-      }
-      else if (type == WireCacheTransferState) {
-        return PigeonInternalWireCacheTransferStateNativeInterop.fromNSNumber(numValue);
+      } else if (type == WireCacheChecksumAlgorithm) {
+        return PigeonInternalWireCacheChecksumAlgorithmNativeInterop.fromNSNumber(
+          numValue,
+        );
+      } else if (type == WireCacheEvictionPolicy) {
+        return PigeonInternalWireCacheEvictionPolicyNativeInterop.fromNSNumber(
+          numValue,
+        );
+      } else if (type == WireCacheResultSource) {
+        return PigeonInternalWireCacheResultSourceNativeInterop.fromNSNumber(
+          numValue,
+        );
+      } else if (type == WireCacheTransferState) {
+        return PigeonInternalWireCacheTransferStateNativeInterop.fromNSNumber(
+          numValue,
+        );
       }
 
       return numValue.longValue;
     } else if (NSString.isA(value)) {
       return NSString.as(value).toDartString();
     } else if (ffi_bridge.CacheMessagesPigeonTypedData.isA(value)) {
-      return _getValueFromPigeonTypedData(value as ffi_bridge.CacheMessagesPigeonTypedData);
+      return _getValueFromPigeonTypedData(
+        value as ffi_bridge.CacheMessagesPigeonTypedData,
+      );
     } else if (NSArray.isA(value)) {
       final NSArray array = NSArray.as(value);
       final List<Object?> res = <Object?>[];
@@ -358,28 +430,47 @@ class _PigeonFfiCodec {
       final Map<Object?, Object?> res = <Object?, Object?>{};
       for (int i = 0; i < keys.count; i++) {
         final ObjCObject key = keys.objectAtIndex(i);
-        res[readValue(key, type, type2)] = readValue(dict.objectForKey(key), type, type2);
+        res[readValue(key, type, type2)] = readValue(
+          dict.objectForKey(key),
+          type,
+          type2,
+        );
       }
       return res;
     } else if (ffi_bridge.CacheMessagesNumberWrapper.isA(value)) {
-      return _convertNumberWrapperToDart(ffi_bridge.CacheMessagesNumberWrapper.as(value));
-          } else if (ffi_bridge.WireCacheManagerConfigBridge.isA(value)) {
-        return PigeonInternalWireCacheManagerConfigNativeInterop.fromFfi(ffi_bridge.WireCacheManagerConfigBridge.as(value));
-              } else if (ffi_bridge.WireCacheRequestBridge.isA(value)) {
-        return PigeonInternalWireCacheRequestNativeInterop.fromFfi(ffi_bridge.WireCacheRequestBridge.as(value));
-              } else if (ffi_bridge.WireCacheEntryBridge.isA(value)) {
-        return PigeonInternalWireCacheEntryNativeInterop.fromFfi(ffi_bridge.WireCacheEntryBridge.as(value));
-              } else if (ffi_bridge.WireCacheFetchResultBridge.isA(value)) {
-        return PigeonInternalWireCacheFetchResultNativeInterop.fromFfi(ffi_bridge.WireCacheFetchResultBridge.as(value));
-              } else if (ffi_bridge.WireCacheProgressEventBridge.isA(value)) {
-        return PigeonInternalWireCacheProgressEventNativeInterop.fromFfi(ffi_bridge.WireCacheProgressEventBridge.as(value));
-              } else if (ffi_bridge.WireCacheStatsBridge.isA(value)) {
-        return PigeonInternalWireCacheStatsNativeInterop.fromFfi(ffi_bridge.WireCacheStatsBridge.as(value));
-              } else if (ffi_bridge.WireCachePlatformCapabilitiesBridge.isA(value)) {
-        return PigeonInternalWireCachePlatformCapabilitiesNativeInterop.fromFfi(ffi_bridge.WireCachePlatformCapabilitiesBridge.as(value));
-        
+      return _convertNumberWrapperToDart(
+        ffi_bridge.CacheMessagesNumberWrapper.as(value),
+      );
+    } else if (ffi_bridge.WireCacheManagerConfigBridge.isA(value)) {
+      return PigeonInternalWireCacheManagerConfigNativeInterop.fromFfi(
+        ffi_bridge.WireCacheManagerConfigBridge.as(value),
+      );
+    } else if (ffi_bridge.WireCacheRequestBridge.isA(value)) {
+      return PigeonInternalWireCacheRequestNativeInterop.fromFfi(
+        ffi_bridge.WireCacheRequestBridge.as(value),
+      );
+    } else if (ffi_bridge.WireCacheEntryBridge.isA(value)) {
+      return PigeonInternalWireCacheEntryNativeInterop.fromFfi(
+        ffi_bridge.WireCacheEntryBridge.as(value),
+      );
+    } else if (ffi_bridge.WireCacheFetchResultBridge.isA(value)) {
+      return PigeonInternalWireCacheFetchResultNativeInterop.fromFfi(
+        ffi_bridge.WireCacheFetchResultBridge.as(value),
+      );
+    } else if (ffi_bridge.WireCacheProgressEventBridge.isA(value)) {
+      return PigeonInternalWireCacheProgressEventNativeInterop.fromFfi(
+        ffi_bridge.WireCacheProgressEventBridge.as(value),
+      );
+    } else if (ffi_bridge.WireCacheStatsBridge.isA(value)) {
+      return PigeonInternalWireCacheStatsNativeInterop.fromFfi(
+        ffi_bridge.WireCacheStatsBridge.as(value),
+      );
+    } else if (ffi_bridge.WireCachePlatformCapabilitiesBridge.isA(value)) {
+      return PigeonInternalWireCachePlatformCapabilitiesNativeInterop.fromFfi(
+        ffi_bridge.WireCachePlatformCapabilitiesBridge.as(value),
+      );
     } else {
-    throw ArgumentError.value(value);
+      throw ArgumentError.value(value);
     }
   }
 
@@ -388,89 +479,110 @@ class _PigeonFfiCodec {
     bool generic = false,
   }) {
     if (value == null) {
-      if (_isTypeOrNullableType<T>(ObjCObject) || _isTypeOrNullableType<T>(NSObject)) {
+      if (_isTypeOrNullableType<T>(ObjCObject) ||
+          _isTypeOrNullableType<T>(NSObject)) {
         return ffi_bridge.CacheMessagesPigeonInternalNull() as T;
       }
       return null as T;
     }
     if (value is bool) {
       return (generic
-          ? _convertToFfiNumberWrapper(value)
-          : NSNumber.alloc().initWithLong(value ? 1 : 0)) as T;
+              ? _convertToFfiNumberWrapper(value)
+              : NSNumber.alloc().initWithLong(value ? 1 : 0))
+          as T;
     } else if (value is double) {
       return (generic
-          ? _convertToFfiNumberWrapper(value)
-          : NSNumber.alloc().initWithDouble(value)) as T;
+              ? _convertToFfiNumberWrapper(value)
+              : NSNumber.alloc().initWithDouble(value))
+          as T;
       // ignore: avoid_double_and_int_checks
     } else if (value is int) {
       return (generic
-          ? _convertToFfiNumberWrapper(value)
-          : NSNumber.alloc().initWithLong(value)) as T;
+              ? _convertToFfiNumberWrapper(value)
+              : NSNumber.alloc().initWithLong(value))
+          as T;
     } else if (value is Enum) {
       return (generic
-          ? _convertToFfiNumberWrapper(value)
-          : NSNumber.alloc().initWithLong(value.index)) as T;
+              ? _convertToFfiNumberWrapper(value)
+              : NSNumber.alloc().initWithLong(value.index))
+          as T;
     } else if (value is String) {
       return NSString(value) as T;
     } else if (value is TypedData) {
       return _toPigeonTypedData(value) as T;
-        } else if (value is List<WireCacheRequest> && _isTypeOrNullableType<NSMutableArray>(T)) {
+    } else if (value is List<WireCacheRequest> &&
+        _isTypeOrNullableType<NSMutableArray>(T)) {
       final NSMutableArray res = NSMutableArray();
       for (final WireCacheRequest entry in value) {
-        res.addObject(writeValue<ffi_bridge.WireCacheRequestBridge>(entry, generic: true));
+        res.addObject(
+          writeValue<ffi_bridge.WireCacheRequestBridge>(entry, generic: true),
+        );
       }
       return res as T;
-            } else if (value is List<WireCacheEntry> && _isTypeOrNullableType<NSMutableArray>(T)) {
+    } else if (value is List<WireCacheEntry> &&
+        _isTypeOrNullableType<NSMutableArray>(T)) {
       final NSMutableArray res = NSMutableArray();
       for (final WireCacheEntry entry in value) {
-        res.addObject(writeValue<ffi_bridge.WireCacheEntryBridge>(entry, generic: true));
+        res.addObject(
+          writeValue<ffi_bridge.WireCacheEntryBridge>(entry, generic: true),
+        );
       }
       return res as T;
-        
     } else if (value is List) {
       final NSMutableArray res = NSMutableArray();
       for (final Object? entry in value) {
-        res.addObject(entry == null
-            ? ffi_bridge.CacheMessagesPigeonInternalNull()
-            : writeValue(entry, generic: true));
+        res.addObject(
+          entry == null
+              ? ffi_bridge.CacheMessagesPigeonInternalNull()
+              : writeValue(entry, generic: true),
+        );
       }
       return res as T;
-        } else if (value is Map<String, int> && _isTypeOrNullableType<NSDictionary>(T)) {
+    } else if (value is Map<String, int> &&
+        _isTypeOrNullableType<NSDictionary>(T)) {
       final NSMutableDictionary res = NSMutableDictionary();
       for (final MapEntry<String, int> entry in value.entries) {
-        res.setObject(writeValue(entry.value, generic: true), forKey: NSCopying.as(writeValue(entry.key, generic: true)));
+        res.setObject(
+          writeValue(entry.value, generic: true),
+          forKey: NSCopying.as(writeValue(entry.key, generic: true)),
+        );
       }
       return res as T;
-            } else if (value is Map<String, String> && _isTypeOrNullableType<NSDictionary>(T)) {
+    } else if (value is Map<String, String> &&
+        _isTypeOrNullableType<NSDictionary>(T)) {
       final NSMutableDictionary res = NSMutableDictionary();
       for (final MapEntry<String, String> entry in value.entries) {
-        res.setObject(writeValue(entry.value, generic: true), forKey: NSCopying.as(writeValue(entry.key, generic: true)));
+        res.setObject(
+          writeValue(entry.value, generic: true),
+          forKey: NSCopying.as(writeValue(entry.key, generic: true)),
+        );
       }
       return res as T;
-        
     } else if (value is Map) {
       final NSMutableDictionary res = NSMutableDictionary();
       for (final MapEntry<Object?, Object?> entry in value.entries) {
-        res.setObject(writeValue(entry.value, generic: true), forKey: NSCopying.as(writeValue(entry.key, generic: true)));
+        res.setObject(
+          writeValue(entry.value, generic: true),
+          forKey: NSCopying.as(writeValue(entry.key, generic: true)),
+        );
       }
       return res as T;
-          } else if (value is WireCacheManagerConfig) {
-        return value.toFfi() as T;
-              } else if (value is WireCacheRequest) {
-        return value.toFfi() as T;
-              } else if (value is WireCacheEntry) {
-        return value.toFfi() as T;
-              } else if (value is WireCacheFetchResult) {
-        return value.toFfi() as T;
-              } else if (value is WireCacheProgressEvent) {
-        return value.toFfi() as T;
-              } else if (value is WireCacheStats) {
-        return value.toFfi() as T;
-              } else if (value is WireCachePlatformCapabilities) {
-        return value.toFfi() as T;
-        
+    } else if (value is WireCacheManagerConfig) {
+      return value.toFfi() as T;
+    } else if (value is WireCacheRequest) {
+      return value.toFfi() as T;
+    } else if (value is WireCacheEntry) {
+      return value.toFfi() as T;
+    } else if (value is WireCacheFetchResult) {
+      return value.toFfi() as T;
+    } else if (value is WireCacheProgressEvent) {
+      return value.toFfi() as T;
+    } else if (value is WireCacheStats) {
+      return value.toFfi() as T;
+    } else if (value is WireCachePlatformCapabilities) {
+      return value.toFfi() as T;
     } else {
-    throw ArgumentError.value(value);
+      throw ArgumentError.value(value);
     }
   }
 }
@@ -479,7 +591,9 @@ class _PigeonFfiCodec {
 NSData _typedDataToNSData(TypedData value) {
   final int lengthInBytes = value.lengthInBytes;
   // `malloc(0)` may return null, which `NSData` can't own.
-  final Pointer<Uint8> bytes = malloc<Uint8>(lengthInBytes == 0 ? 1 : lengthInBytes);
+  final Pointer<Uint8> bytes = malloc<Uint8>(
+    lengthInBytes == 0 ? 1 : lengthInBytes,
+  );
   bytes
       .asTypedList(lengthInBytes)
       .setAll(0, value.buffer.asUint8List(value.offsetInBytes, lengthInBytes));
@@ -505,9 +619,9 @@ ffi_bridge.CacheMessagesPigeonTypedData _toPigeonTypedData(TypedData value) {
   );
 }
 
-
-
-Object? _getValueFromPigeonTypedData(ffi_bridge.CacheMessagesPigeonTypedData value) {
+Object? _getValueFromPigeonTypedData(
+  ffi_bridge.CacheMessagesPigeonTypedData value,
+) {
   final NSData data = value.data;
   final ObjCObjectRef dataRef = data.object$.ref;
   try {
@@ -543,7 +657,6 @@ Object? _getValueFromPigeonTypedData(ffi_bridge.CacheMessagesPigeonTypedData val
     dataRef.release();
   }
 }
-    
 
 // ignore: unused_element
 class _PigeonFfiBuffers {
@@ -564,8 +677,12 @@ class _PigeonFfiBuffers {
   }
 
   static NSData encode(Object? value) {
-    final ByteData data = pigeon_CacheMessagesmessageCodec.encodeMessage(value)!;
-    return _typedDataToNSData(data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes));
+    final ByteData data = pigeon_CacheMessagesmessageCodec.encodeMessage(
+      value,
+    )!;
+    return _typedDataToNSData(
+      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+    );
   }
 
   static NSData? encodeOrNull(Object? value) {
@@ -574,12 +691,17 @@ class _PigeonFfiBuffers {
 
   static Object? decode(NSData? data) {
     final Uint8List? bytes = toUint8List(data);
-    return bytes == null ? null : pigeon_CacheMessagesmessageCodec.decodeMessage(ByteData.sublistView(bytes));
+    return bytes == null
+        ? null
+        : pigeon_CacheMessagesmessageCodec.decodeMessage(
+            ByteData.sublistView(bytes),
+          );
   }
 }
 
-
-Object? _convertNumberWrapperToDart(ffi_bridge.CacheMessagesNumberWrapper value) {
+Object? _convertNumberWrapperToDart(
+  ffi_bridge.CacheMessagesNumberWrapper value,
+) {
   switch (value.type) {
     case 1:
       return value.number.longValue;
@@ -588,37 +710,68 @@ Object? _convertNumberWrapperToDart(ffi_bridge.CacheMessagesNumberWrapper value)
     case 3:
       return value.number.boolValue;
     case 4:
-      return PigeonInternalWireCacheChecksumAlgorithmNativeInterop.fromNSNumber(value.number);
+      return PigeonInternalWireCacheChecksumAlgorithmNativeInterop.fromNSNumber(
+        value.number,
+      );
     case 5:
-      return PigeonInternalWireCacheEvictionPolicyNativeInterop.fromNSNumber(value.number);
+      return PigeonInternalWireCacheEvictionPolicyNativeInterop.fromNSNumber(
+        value.number,
+      );
     case 6:
-      return PigeonInternalWireCacheResultSourceNativeInterop.fromNSNumber(value.number);
+      return PigeonInternalWireCacheResultSourceNativeInterop.fromNSNumber(
+        value.number,
+      );
     case 7:
-      return PigeonInternalWireCacheTransferStateNativeInterop.fromNSNumber(value.number);
+      return PigeonInternalWireCacheTransferStateNativeInterop.fromNSNumber(
+        value.number,
+      );
     default:
       throw ArgumentError.value(value);
   }
 }
+
 ffi_bridge.CacheMessagesNumberWrapper _convertToFfiNumberWrapper(Object value) {
   switch (value) {
     case int _:
-      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(NSNumber.alloc().initWithLong(value), type: 1);
+      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(
+        NSNumber.alloc().initWithLong(value),
+        type: 1,
+      );
     case double _:
-      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(NSNumber.alloc().initWithDouble(value), type: 2);
+      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(
+        NSNumber.alloc().initWithDouble(value),
+        type: 2,
+      );
     case bool _:
-      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(NSNumber.alloc().initWithLong(value ? 1 : 0), type: 3);
+      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(
+        NSNumber.alloc().initWithLong(value ? 1 : 0),
+        type: 3,
+      );
     case WireCacheChecksumAlgorithm _:
-      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(value.toNSNumber(), type: 4);
+      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(
+        value.toNSNumber(),
+        type: 4,
+      );
     case WireCacheEvictionPolicy _:
-      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(value.toNSNumber(), type: 5);
+      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(
+        value.toNSNumber(),
+        type: 5,
+      );
     case WireCacheResultSource _:
-      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(value.toNSNumber(), type: 6);
+      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(
+        value.toNSNumber(),
+        type: 6,
+      );
     case WireCacheTransferState _:
-      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(value.toNSNumber(), type: 7);
+      return ffi_bridge.CacheMessagesNumberWrapper.alloc().initWithNumber(
+        value.toNSNumber(),
+        type: 7,
+      );
     default:
       throw ArgumentError.value(value);
   }
 }
+
 bool _isType<T>(Type t) => T == t;
 bool _isTypeOrNullableType<T>(Type t) => _isType<T>(t) || _isType<T?>(t);
 
@@ -647,6 +800,7 @@ int? _pigeonEngineAffinity;
 void _pigeonUpdateFlutterApiEngineAffinity() {
   _CacheProgressFlutterApiRegistrar.pigeonVar_updateEngineAffinity();
 }
+
 void _throwIfFfiError(ffi_bridge.PigeonError error) {
   if (error.code != null) {
     throw _wrapFfiError(error);
@@ -676,7 +830,9 @@ void _reportFfiError(ffi_bridge.PigeonError errorOut, Object e) {
 
 PlatformException _wrapJniException(JThrowable e) {
   if (e.isA<jni_bridge.FlutterError>(jni_bridge.FlutterError.type)) {
-    final jni_bridge.FlutterError pigeonError = e.as(jni_bridge.FlutterError.type);
+    final jni_bridge.FlutterError pigeonError = e.as(
+      jni_bridge.FlutterError.type,
+    );
     return PlatformException(
       code: pigeonError.code.toDartString(),
       message: pigeonError.message?.toDartString(),
@@ -692,15 +848,18 @@ PlatformException _wrapJniException(JThrowable e) {
   );
 }
 
-
-
-extension PigeonInternalWireCacheChecksumAlgorithmNativeInterop on WireCacheChecksumAlgorithm {
+extension PigeonInternalWireCacheChecksumAlgorithmNativeInterop
+    on WireCacheChecksumAlgorithm {
   jni_bridge.WireCacheChecksumAlgorithm toJni() {
     return jni_bridge.WireCacheChecksumAlgorithm.Companion.ofRaw(index)!;
   }
 
-  static WireCacheChecksumAlgorithm? fromJni(jni_bridge.WireCacheChecksumAlgorithm? jniEnum) {
-    return jniEnum == null ? null : WireCacheChecksumAlgorithm.values[jniEnum.raw];
+  static WireCacheChecksumAlgorithm? fromJni(
+    jni_bridge.WireCacheChecksumAlgorithm? jniEnum,
+  ) {
+    return jniEnum == null
+        ? null
+        : WireCacheChecksumAlgorithm.values[jniEnum.raw];
   }
 
   NSNumber toNSNumber() {
@@ -708,16 +867,21 @@ extension PigeonInternalWireCacheChecksumAlgorithmNativeInterop on WireCacheChec
   }
 
   static WireCacheChecksumAlgorithm? fromNSNumber(NSNumber? ffiEnum) {
-    return ffiEnum == null ? null : WireCacheChecksumAlgorithm.values[ffiEnum.intValue];
+    return ffiEnum == null
+        ? null
+        : WireCacheChecksumAlgorithm.values[ffiEnum.intValue];
   }
 }
 
-extension PigeonInternalWireCacheEvictionPolicyNativeInterop on WireCacheEvictionPolicy {
+extension PigeonInternalWireCacheEvictionPolicyNativeInterop
+    on WireCacheEvictionPolicy {
   jni_bridge.WireCacheEvictionPolicy toJni() {
     return jni_bridge.WireCacheEvictionPolicy.Companion.ofRaw(index)!;
   }
 
-  static WireCacheEvictionPolicy? fromJni(jni_bridge.WireCacheEvictionPolicy? jniEnum) {
+  static WireCacheEvictionPolicy? fromJni(
+    jni_bridge.WireCacheEvictionPolicy? jniEnum,
+  ) {
     return jniEnum == null ? null : WireCacheEvictionPolicy.values[jniEnum.raw];
   }
 
@@ -726,16 +890,21 @@ extension PigeonInternalWireCacheEvictionPolicyNativeInterop on WireCacheEvictio
   }
 
   static WireCacheEvictionPolicy? fromNSNumber(NSNumber? ffiEnum) {
-    return ffiEnum == null ? null : WireCacheEvictionPolicy.values[ffiEnum.intValue];
+    return ffiEnum == null
+        ? null
+        : WireCacheEvictionPolicy.values[ffiEnum.intValue];
   }
 }
 
-extension PigeonInternalWireCacheResultSourceNativeInterop on WireCacheResultSource {
+extension PigeonInternalWireCacheResultSourceNativeInterop
+    on WireCacheResultSource {
   jni_bridge.WireCacheResultSource toJni() {
     return jni_bridge.WireCacheResultSource.Companion.ofRaw(index)!;
   }
 
-  static WireCacheResultSource? fromJni(jni_bridge.WireCacheResultSource? jniEnum) {
+  static WireCacheResultSource? fromJni(
+    jni_bridge.WireCacheResultSource? jniEnum,
+  ) {
     return jniEnum == null ? null : WireCacheResultSource.values[jniEnum.raw];
   }
 
@@ -744,16 +913,21 @@ extension PigeonInternalWireCacheResultSourceNativeInterop on WireCacheResultSou
   }
 
   static WireCacheResultSource? fromNSNumber(NSNumber? ffiEnum) {
-    return ffiEnum == null ? null : WireCacheResultSource.values[ffiEnum.intValue];
+    return ffiEnum == null
+        ? null
+        : WireCacheResultSource.values[ffiEnum.intValue];
   }
 }
 
-extension PigeonInternalWireCacheTransferStateNativeInterop on WireCacheTransferState {
+extension PigeonInternalWireCacheTransferStateNativeInterop
+    on WireCacheTransferState {
   jni_bridge.WireCacheTransferState toJni() {
     return jni_bridge.WireCacheTransferState.Companion.ofRaw(index)!;
   }
 
-  static WireCacheTransferState? fromJni(jni_bridge.WireCacheTransferState? jniEnum) {
+  static WireCacheTransferState? fromJni(
+    jni_bridge.WireCacheTransferState? jniEnum,
+  ) {
     return jniEnum == null ? null : WireCacheTransferState.values[jniEnum.raw];
   }
 
@@ -762,13 +936,16 @@ extension PigeonInternalWireCacheTransferStateNativeInterop on WireCacheTransfer
   }
 
   static WireCacheTransferState? fromNSNumber(NSNumber? ffiEnum) {
-    return ffiEnum == null ? null : WireCacheTransferState.values[ffiEnum.intValue];
+    return ffiEnum == null
+        ? null
+        : WireCacheTransferState.values[ffiEnum.intValue];
   }
 }
 
-extension PigeonInternalWireCacheManagerConfigNativeInterop on WireCacheManagerConfig {
+extension PigeonInternalWireCacheManagerConfigNativeInterop
+    on WireCacheManagerConfig {
   jni_bridge.WireCacheManagerConfig toJni() {
-    return jni_bridge.WireCacheManagerConfig (
+    return jni_bridge.WireCacheManagerConfig(
       maxDiskCacheBytes,
       maxEntries,
       defaultTtlSeconds,
@@ -783,58 +960,84 @@ extension PigeonInternalWireCacheManagerConfigNativeInterop on WireCacheManagerC
     );
   }
 
-  static WireCacheManagerConfig? fromJni(jni_bridge.WireCacheManagerConfig? jniClass) {
-    return jniClass == null ? null : WireCacheManagerConfig(
-      maxDiskCacheBytes: jniClass.maxDiskCacheBytes,
-      maxEntries: jniClass.maxEntries,
-      defaultTtlSeconds: jniClass.defaultTtlSeconds,
-      evictionPolicy: PigeonInternalWireCacheEvictionPolicyNativeInterop.fromJni(jniClass.evictionPolicy)!,
-      cacheSubdirectory: jniClass.cacheSubdirectory.toDartString(releaseOriginal: true),
-      maxConcurrentDownloads: jniClass.maxConcurrentDownloads,
-      connectTimeoutMs: jniClass.connectTimeoutMs,
-      readTimeoutMs: jniClass.readTimeoutMs,
-      defaultHeaders: (_PigeonJniCodec.readValue(jniClass.defaultHeaders)! as Map<Object?, Object?>).cast<String, String>(),
-      respectHttpCacheHeaders: jniClass.respectHttpCacheHeaders,
-      autoTrimOnWrite: jniClass.autoTrimOnWrite,
-    );
+  static WireCacheManagerConfig? fromJni(
+    jni_bridge.WireCacheManagerConfig? jniClass,
+  ) {
+    return jniClass == null
+        ? null
+        : WireCacheManagerConfig(
+            maxDiskCacheBytes: jniClass.maxDiskCacheBytes,
+            maxEntries: jniClass.maxEntries,
+            defaultTtlSeconds: jniClass.defaultTtlSeconds,
+            evictionPolicy:
+                PigeonInternalWireCacheEvictionPolicyNativeInterop.fromJni(
+                  jniClass.evictionPolicy,
+                )!,
+            cacheSubdirectory: jniClass.cacheSubdirectory.toDartString(
+              releaseOriginal: true,
+            ),
+            maxConcurrentDownloads: jniClass.maxConcurrentDownloads,
+            connectTimeoutMs: jniClass.connectTimeoutMs,
+            readTimeoutMs: jniClass.readTimeoutMs,
+            defaultHeaders:
+                (_PigeonJniCodec.readValue(jniClass.defaultHeaders)!
+                        as Map<Object?, Object?>)
+                    .cast<String, String>(),
+            respectHttpCacheHeaders: jniClass.respectHttpCacheHeaders,
+            autoTrimOnWrite: jniClass.autoTrimOnWrite,
+          );
   }
 
   ffi_bridge.WireCacheManagerConfigBridge toFfi() {
-    return ffi_bridge.WireCacheManagerConfigBridge.alloc().initWithMaxDiskCacheBytes(
-      maxDiskCacheBytes,
-      maxEntries: maxEntries,
-      defaultTtlSeconds: defaultTtlSeconds,
-      evictionPolicy: ffi_bridge.WireCacheEvictionPolicy.values[evictionPolicy.index],
-      cacheSubdirectory: _PigeonFfiCodec.writeValue<NSString>(cacheSubdirectory),
-      maxConcurrentDownloads: maxConcurrentDownloads,
-      connectTimeoutMs: connectTimeoutMs,
-      readTimeoutMs: readTimeoutMs,
-      defaultHeaders: _PigeonFfiCodec.writeValue<NSDictionary>(defaultHeaders),
-      respectHttpCacheHeaders: respectHttpCacheHeaders,
-      autoTrimOnWrite: autoTrimOnWrite,
-    );
+    return ffi_bridge.WireCacheManagerConfigBridge.alloc()
+        .initWithMaxDiskCacheBytes(
+          maxDiskCacheBytes,
+          maxEntries: maxEntries,
+          defaultTtlSeconds: defaultTtlSeconds,
+          evictionPolicy:
+              ffi_bridge.WireCacheEvictionPolicy.values[evictionPolicy.index],
+          cacheSubdirectory: _PigeonFfiCodec.writeValue<NSString>(
+            cacheSubdirectory,
+          ),
+          maxConcurrentDownloads: maxConcurrentDownloads,
+          connectTimeoutMs: connectTimeoutMs,
+          readTimeoutMs: readTimeoutMs,
+          defaultHeaders: _PigeonFfiCodec.writeValue<NSDictionary>(
+            defaultHeaders,
+          ),
+          respectHttpCacheHeaders: respectHttpCacheHeaders,
+          autoTrimOnWrite: autoTrimOnWrite,
+        );
   }
 
-  static WireCacheManagerConfig? fromFfi(ffi_bridge.WireCacheManagerConfigBridge? ffiClass) {
-    return ffiClass == null ? null : WireCacheManagerConfig(
-      maxDiskCacheBytes: ffiClass.maxDiskCacheBytes,
-      maxEntries: ffiClass.maxEntries,
-      defaultTtlSeconds: ffiClass.defaultTtlSeconds,
-      evictionPolicy: WireCacheEvictionPolicy.values[ffiClass.evictionPolicy.index],
-      cacheSubdirectory: ffiClass.cacheSubdirectory.toDartString(),
-      maxConcurrentDownloads: ffiClass.maxConcurrentDownloads,
-      connectTimeoutMs: ffiClass.connectTimeoutMs,
-      readTimeoutMs: ffiClass.readTimeoutMs,
-      defaultHeaders: (_PigeonFfiCodec.readValue(ffiClass.defaultHeaders)! as Map<Object?, Object?>).cast<String, String>(),
-      respectHttpCacheHeaders: ffiClass.respectHttpCacheHeaders,
-      autoTrimOnWrite: ffiClass.autoTrimOnWrite,
-    );
+  static WireCacheManagerConfig? fromFfi(
+    ffi_bridge.WireCacheManagerConfigBridge? ffiClass,
+  ) {
+    return ffiClass == null
+        ? null
+        : WireCacheManagerConfig(
+            maxDiskCacheBytes: ffiClass.maxDiskCacheBytes,
+            maxEntries: ffiClass.maxEntries,
+            defaultTtlSeconds: ffiClass.defaultTtlSeconds,
+            evictionPolicy:
+                WireCacheEvictionPolicy.values[ffiClass.evictionPolicy.index],
+            cacheSubdirectory: ffiClass.cacheSubdirectory.toDartString(),
+            maxConcurrentDownloads: ffiClass.maxConcurrentDownloads,
+            connectTimeoutMs: ffiClass.connectTimeoutMs,
+            readTimeoutMs: ffiClass.readTimeoutMs,
+            defaultHeaders:
+                (_PigeonFfiCodec.readValue(ffiClass.defaultHeaders)!
+                        as Map<Object?, Object?>)
+                    .cast<String, String>(),
+            respectHttpCacheHeaders: ffiClass.respectHttpCacheHeaders,
+            autoTrimOnWrite: ffiClass.autoTrimOnWrite,
+          );
   }
 }
 
 extension PigeonInternalWireCacheRequestNativeInterop on WireCacheRequest {
   jni_bridge.WireCacheRequest toJni() {
-    return jni_bridge.WireCacheRequest (
+    return jni_bridge.WireCacheRequest(
       _PigeonJniCodec.writeValue<JString>(url),
       _PigeonJniCodec.writeValue<JString?>(customKey),
       _PigeonJniCodec.writeValue<JString?>(tag),
@@ -850,19 +1053,31 @@ extension PigeonInternalWireCacheRequestNativeInterop on WireCacheRequest {
   }
 
   static WireCacheRequest? fromJni(jni_bridge.WireCacheRequest? jniClass) {
-    return jniClass == null ? null : WireCacheRequest(
-      url: jniClass.url.toDartString(releaseOriginal: true),
-      customKey: jniClass.customKey?.toDartString(releaseOriginal: true),
-      tag: jniClass.tag?.toDartString(releaseOriginal: true),
-      fileExtension: jniClass.fileExtension?.toDartString(releaseOriginal: true),
-      headers: (_PigeonJniCodec.readValue(jniClass.headers)! as Map<Object?, Object?>).cast<String, String>(),
-      ttlSeconds: jniClass.ttlSeconds?.toDartInt(releaseOriginal: true),
-      forceRefresh: jniClass.forceRefresh,
-      fallbackToCacheOnError: jniClass.fallbackToCacheOnError,
-      pinned: jniClass.pinned,
-      checksumAlgorithm: PigeonInternalWireCacheChecksumAlgorithmNativeInterop.fromJni(jniClass.checksumAlgorithm)!,
-      expectedChecksum: jniClass.expectedChecksum?.toDartString(releaseOriginal: true),
-    );
+    return jniClass == null
+        ? null
+        : WireCacheRequest(
+            url: jniClass.url.toDartString(releaseOriginal: true),
+            customKey: jniClass.customKey?.toDartString(releaseOriginal: true),
+            tag: jniClass.tag?.toDartString(releaseOriginal: true),
+            fileExtension: jniClass.fileExtension?.toDartString(
+              releaseOriginal: true,
+            ),
+            headers:
+                (_PigeonJniCodec.readValue(jniClass.headers)!
+                        as Map<Object?, Object?>)
+                    .cast<String, String>(),
+            ttlSeconds: jniClass.ttlSeconds?.toDartInt(releaseOriginal: true),
+            forceRefresh: jniClass.forceRefresh,
+            fallbackToCacheOnError: jniClass.fallbackToCacheOnError,
+            pinned: jniClass.pinned,
+            checksumAlgorithm:
+                PigeonInternalWireCacheChecksumAlgorithmNativeInterop.fromJni(
+                  jniClass.checksumAlgorithm,
+                )!,
+            expectedChecksum: jniClass.expectedChecksum?.toDartString(
+              releaseOriginal: true,
+            ),
+          );
   }
 
   ffi_bridge.WireCacheRequestBridge toFfi() {
@@ -876,31 +1091,40 @@ extension PigeonInternalWireCacheRequestNativeInterop on WireCacheRequest {
       forceRefresh: forceRefresh,
       fallbackToCacheOnError: fallbackToCacheOnError,
       pinned: pinned,
-      checksumAlgorithm: ffi_bridge.WireCacheChecksumAlgorithm.values[checksumAlgorithm.index],
+      checksumAlgorithm:
+          ffi_bridge.WireCacheChecksumAlgorithm.values[checksumAlgorithm.index],
       expectedChecksum: _PigeonFfiCodec.writeValue<NSString?>(expectedChecksum),
     );
   }
 
-  static WireCacheRequest? fromFfi(ffi_bridge.WireCacheRequestBridge? ffiClass) {
-    return ffiClass == null ? null : WireCacheRequest(
-      url: ffiClass.url.toDartString(),
-      customKey: ffiClass.customKey?.toDartString(),
-      tag: ffiClass.tag?.toDartString(),
-      fileExtension: ffiClass.fileExtension?.toDartString(),
-      headers: (_PigeonFfiCodec.readValue(ffiClass.headers)! as Map<Object?, Object?>).cast<String, String>(),
-      ttlSeconds: ffiClass.ttlSeconds?.longValue,
-      forceRefresh: ffiClass.forceRefresh,
-      fallbackToCacheOnError: ffiClass.fallbackToCacheOnError,
-      pinned: ffiClass.pinned,
-      checksumAlgorithm: WireCacheChecksumAlgorithm.values[ffiClass.checksumAlgorithm.index],
-      expectedChecksum: ffiClass.expectedChecksum?.toDartString(),
-    );
+  static WireCacheRequest? fromFfi(
+    ffi_bridge.WireCacheRequestBridge? ffiClass,
+  ) {
+    return ffiClass == null
+        ? null
+        : WireCacheRequest(
+            url: ffiClass.url.toDartString(),
+            customKey: ffiClass.customKey?.toDartString(),
+            tag: ffiClass.tag?.toDartString(),
+            fileExtension: ffiClass.fileExtension?.toDartString(),
+            headers:
+                (_PigeonFfiCodec.readValue(ffiClass.headers)!
+                        as Map<Object?, Object?>)
+                    .cast<String, String>(),
+            ttlSeconds: ffiClass.ttlSeconds?.longValue,
+            forceRefresh: ffiClass.forceRefresh,
+            fallbackToCacheOnError: ffiClass.fallbackToCacheOnError,
+            pinned: ffiClass.pinned,
+            checksumAlgorithm: WireCacheChecksumAlgorithm
+                .values[ffiClass.checksumAlgorithm.index],
+            expectedChecksum: ffiClass.expectedChecksum?.toDartString(),
+          );
   }
 }
 
 extension PigeonInternalWireCacheEntryNativeInterop on WireCacheEntry {
   jni_bridge.WireCacheEntry toJni() {
-    return jni_bridge.WireCacheEntry (
+    return jni_bridge.WireCacheEntry(
       _PigeonJniCodec.writeValue<JString>(key),
       _PigeonJniCodec.writeValue<JString>(url),
       _PigeonJniCodec.writeValue<JString>(filePath),
@@ -920,23 +1144,30 @@ extension PigeonInternalWireCacheEntryNativeInterop on WireCacheEntry {
   }
 
   static WireCacheEntry? fromJni(jni_bridge.WireCacheEntry? jniClass) {
-    return jniClass == null ? null : WireCacheEntry(
-      key: jniClass.key.toDartString(releaseOriginal: true),
-      url: jniClass.url.toDartString(releaseOriginal: true),
-      filePath: jniClass.filePath.toDartString(releaseOriginal: true),
-      sizeBytes: jniClass.sizeBytes,
-      createdAtMs: jniClass.createdAtMs,
-      lastAccessedAtMs: jniClass.lastAccessedAtMs,
-      expiresAtMs: jniClass.expiresAtMs,
-      hitCount: jniClass.hitCount,
-      tag: jniClass.tag?.toDartString(releaseOriginal: true),
-      mimeType: jniClass.mimeType?.toDartString(releaseOriginal: true),
-      eTag: jniClass.eTag?.toDartString(releaseOriginal: true),
-      lastModified: jniClass.lastModified?.toDartString(releaseOriginal: true),
-      checksum: jniClass.checksum?.toDartString(releaseOriginal: true),
-      checksumAlgorithm: PigeonInternalWireCacheChecksumAlgorithmNativeInterop.fromJni(jniClass.checksumAlgorithm)!,
-      pinned: jniClass.pinned,
-    );
+    return jniClass == null
+        ? null
+        : WireCacheEntry(
+            key: jniClass.key.toDartString(releaseOriginal: true),
+            url: jniClass.url.toDartString(releaseOriginal: true),
+            filePath: jniClass.filePath.toDartString(releaseOriginal: true),
+            sizeBytes: jniClass.sizeBytes,
+            createdAtMs: jniClass.createdAtMs,
+            lastAccessedAtMs: jniClass.lastAccessedAtMs,
+            expiresAtMs: jniClass.expiresAtMs,
+            hitCount: jniClass.hitCount,
+            tag: jniClass.tag?.toDartString(releaseOriginal: true),
+            mimeType: jniClass.mimeType?.toDartString(releaseOriginal: true),
+            eTag: jniClass.eTag?.toDartString(releaseOriginal: true),
+            lastModified: jniClass.lastModified?.toDartString(
+              releaseOriginal: true,
+            ),
+            checksum: jniClass.checksum?.toDartString(releaseOriginal: true),
+            checksumAlgorithm:
+                PigeonInternalWireCacheChecksumAlgorithmNativeInterop.fromJni(
+                  jniClass.checksumAlgorithm,
+                )!,
+            pinned: jniClass.pinned,
+          );
   }
 
   ffi_bridge.WireCacheEntryBridge toFfi() {
@@ -954,35 +1185,40 @@ extension PigeonInternalWireCacheEntryNativeInterop on WireCacheEntry {
       eTag: _PigeonFfiCodec.writeValue<NSString?>(eTag),
       lastModified: _PigeonFfiCodec.writeValue<NSString?>(lastModified),
       checksum: _PigeonFfiCodec.writeValue<NSString?>(checksum),
-      checksumAlgorithm: ffi_bridge.WireCacheChecksumAlgorithm.values[checksumAlgorithm.index],
+      checksumAlgorithm:
+          ffi_bridge.WireCacheChecksumAlgorithm.values[checksumAlgorithm.index],
       pinned: pinned,
     );
   }
 
   static WireCacheEntry? fromFfi(ffi_bridge.WireCacheEntryBridge? ffiClass) {
-    return ffiClass == null ? null : WireCacheEntry(
-      key: ffiClass.key.toDartString(),
-      url: ffiClass.url.toDartString(),
-      filePath: ffiClass.filePath.toDartString(),
-      sizeBytes: ffiClass.sizeBytes,
-      createdAtMs: ffiClass.createdAtMs,
-      lastAccessedAtMs: ffiClass.lastAccessedAtMs,
-      expiresAtMs: ffiClass.expiresAtMs,
-      hitCount: ffiClass.hitCount,
-      tag: ffiClass.tag?.toDartString(),
-      mimeType: ffiClass.mimeType?.toDartString(),
-      eTag: ffiClass.eTag?.toDartString(),
-      lastModified: ffiClass.lastModified?.toDartString(),
-      checksum: ffiClass.checksum?.toDartString(),
-      checksumAlgorithm: WireCacheChecksumAlgorithm.values[ffiClass.checksumAlgorithm.index],
-      pinned: ffiClass.pinned,
-    );
+    return ffiClass == null
+        ? null
+        : WireCacheEntry(
+            key: ffiClass.key.toDartString(),
+            url: ffiClass.url.toDartString(),
+            filePath: ffiClass.filePath.toDartString(),
+            sizeBytes: ffiClass.sizeBytes,
+            createdAtMs: ffiClass.createdAtMs,
+            lastAccessedAtMs: ffiClass.lastAccessedAtMs,
+            expiresAtMs: ffiClass.expiresAtMs,
+            hitCount: ffiClass.hitCount,
+            tag: ffiClass.tag?.toDartString(),
+            mimeType: ffiClass.mimeType?.toDartString(),
+            eTag: ffiClass.eTag?.toDartString(),
+            lastModified: ffiClass.lastModified?.toDartString(),
+            checksum: ffiClass.checksum?.toDartString(),
+            checksumAlgorithm: WireCacheChecksumAlgorithm
+                .values[ffiClass.checksumAlgorithm.index],
+            pinned: ffiClass.pinned,
+          );
   }
 }
 
-extension PigeonInternalWireCacheFetchResultNativeInterop on WireCacheFetchResult {
+extension PigeonInternalWireCacheFetchResultNativeInterop
+    on WireCacheFetchResult {
   jni_bridge.WireCacheFetchResult toJni() {
-    return jni_bridge.WireCacheFetchResult (
+    return jni_bridge.WireCacheFetchResult(
       entry?.toJni(),
       source.toJni(),
       _PigeonJniCodec.writeValue<JLong?>(httpStatusCode),
@@ -990,13 +1226,23 @@ extension PigeonInternalWireCacheFetchResultNativeInterop on WireCacheFetchResul
     );
   }
 
-  static WireCacheFetchResult? fromJni(jni_bridge.WireCacheFetchResult? jniClass) {
-    return jniClass == null ? null : WireCacheFetchResult(
-      entry: PigeonInternalWireCacheEntryNativeInterop.fromJni(jniClass.entry),
-      source: PigeonInternalWireCacheResultSourceNativeInterop.fromJni(jniClass.source)!,
-      httpStatusCode: jniClass.httpStatusCode?.toDartInt(releaseOriginal: true),
-      elapsedMs: jniClass.elapsedMs,
-    );
+  static WireCacheFetchResult? fromJni(
+    jni_bridge.WireCacheFetchResult? jniClass,
+  ) {
+    return jniClass == null
+        ? null
+        : WireCacheFetchResult(
+            entry: PigeonInternalWireCacheEntryNativeInterop.fromJni(
+              jniClass.entry,
+            ),
+            source: PigeonInternalWireCacheResultSourceNativeInterop.fromJni(
+              jniClass.source,
+            )!,
+            httpStatusCode: jniClass.httpStatusCode?.toDartInt(
+              releaseOriginal: true,
+            ),
+            elapsedMs: jniClass.elapsedMs,
+          );
   }
 
   ffi_bridge.WireCacheFetchResultBridge toFfi() {
@@ -1008,19 +1254,26 @@ extension PigeonInternalWireCacheFetchResultNativeInterop on WireCacheFetchResul
     );
   }
 
-  static WireCacheFetchResult? fromFfi(ffi_bridge.WireCacheFetchResultBridge? ffiClass) {
-    return ffiClass == null ? null : WireCacheFetchResult(
-      entry: PigeonInternalWireCacheEntryNativeInterop.fromFfi(ffiClass.entry),
-      source: WireCacheResultSource.values[ffiClass.source.index],
-      httpStatusCode: ffiClass.httpStatusCode?.longValue,
-      elapsedMs: ffiClass.elapsedMs,
-    );
+  static WireCacheFetchResult? fromFfi(
+    ffi_bridge.WireCacheFetchResultBridge? ffiClass,
+  ) {
+    return ffiClass == null
+        ? null
+        : WireCacheFetchResult(
+            entry: PigeonInternalWireCacheEntryNativeInterop.fromFfi(
+              ffiClass.entry,
+            ),
+            source: WireCacheResultSource.values[ffiClass.source.index],
+            httpStatusCode: ffiClass.httpStatusCode?.longValue,
+            elapsedMs: ffiClass.elapsedMs,
+          );
   }
 }
 
-extension PigeonInternalWireCacheProgressEventNativeInterop on WireCacheProgressEvent {
+extension PigeonInternalWireCacheProgressEventNativeInterop
+    on WireCacheProgressEvent {
   jni_bridge.WireCacheProgressEvent toJni() {
-    return jni_bridge.WireCacheProgressEvent (
+    return jni_bridge.WireCacheProgressEvent(
       _PigeonJniCodec.writeValue<JString>(key),
       _PigeonJniCodec.writeValue<JString>(url),
       state.toJni(),
@@ -1031,16 +1284,24 @@ extension PigeonInternalWireCacheProgressEventNativeInterop on WireCacheProgress
     );
   }
 
-  static WireCacheProgressEvent? fromJni(jni_bridge.WireCacheProgressEvent? jniClass) {
-    return jniClass == null ? null : WireCacheProgressEvent(
-      key: jniClass.key.toDartString(releaseOriginal: true),
-      url: jniClass.url.toDartString(releaseOriginal: true),
-      state: PigeonInternalWireCacheTransferStateNativeInterop.fromJni(jniClass.state)!,
-      bytesReceived: jniClass.bytesReceived,
-      totalBytes: jniClass.totalBytes,
-      filePath: jniClass.filePath?.toDartString(releaseOriginal: true),
-      errorMessage: jniClass.errorMessage?.toDartString(releaseOriginal: true),
-    );
+  static WireCacheProgressEvent? fromJni(
+    jni_bridge.WireCacheProgressEvent? jniClass,
+  ) {
+    return jniClass == null
+        ? null
+        : WireCacheProgressEvent(
+            key: jniClass.key.toDartString(releaseOriginal: true),
+            url: jniClass.url.toDartString(releaseOriginal: true),
+            state: PigeonInternalWireCacheTransferStateNativeInterop.fromJni(
+              jniClass.state,
+            )!,
+            bytesReceived: jniClass.bytesReceived,
+            totalBytes: jniClass.totalBytes,
+            filePath: jniClass.filePath?.toDartString(releaseOriginal: true),
+            errorMessage: jniClass.errorMessage?.toDartString(
+              releaseOriginal: true,
+            ),
+          );
   }
 
   ffi_bridge.WireCacheProgressEventBridge toFfi() {
@@ -1055,22 +1316,26 @@ extension PigeonInternalWireCacheProgressEventNativeInterop on WireCacheProgress
     );
   }
 
-  static WireCacheProgressEvent? fromFfi(ffi_bridge.WireCacheProgressEventBridge? ffiClass) {
-    return ffiClass == null ? null : WireCacheProgressEvent(
-      key: ffiClass.key.toDartString(),
-      url: ffiClass.url.toDartString(),
-      state: WireCacheTransferState.values[ffiClass.state.index],
-      bytesReceived: ffiClass.bytesReceived,
-      totalBytes: ffiClass.totalBytes,
-      filePath: ffiClass.filePath?.toDartString(),
-      errorMessage: ffiClass.errorMessage?.toDartString(),
-    );
+  static WireCacheProgressEvent? fromFfi(
+    ffi_bridge.WireCacheProgressEventBridge? ffiClass,
+  ) {
+    return ffiClass == null
+        ? null
+        : WireCacheProgressEvent(
+            key: ffiClass.key.toDartString(),
+            url: ffiClass.url.toDartString(),
+            state: WireCacheTransferState.values[ffiClass.state.index],
+            bytesReceived: ffiClass.bytesReceived,
+            totalBytes: ffiClass.totalBytes,
+            filePath: ffiClass.filePath?.toDartString(),
+            errorMessage: ffiClass.errorMessage?.toDartString(),
+          );
   }
 }
 
 extension PigeonInternalWireCacheStatsNativeInterop on WireCacheStats {
   jni_bridge.WireCacheStats toJni() {
-    return jni_bridge.WireCacheStats (
+    return jni_bridge.WireCacheStats(
       totalEntries,
       totalBytes,
       expiredEntries,
@@ -1085,18 +1350,25 @@ extension PigeonInternalWireCacheStatsNativeInterop on WireCacheStats {
   }
 
   static WireCacheStats? fromJni(jni_bridge.WireCacheStats? jniClass) {
-    return jniClass == null ? null : WireCacheStats(
-      totalEntries: jniClass.totalEntries,
-      totalBytes: jniClass.totalBytes,
-      expiredEntries: jniClass.expiredEntries,
-      pinnedEntries: jniClass.pinnedEntries,
-      maxDiskCacheBytes: jniClass.maxDiskCacheBytes,
-      cacheDirectoryPath: jniClass.cacheDirectoryPath.toDartString(releaseOriginal: true),
-      hitCount: jniClass.hitCount,
-      missCount: jniClass.missCount,
-      evictionCount: jniClass.evictionCount,
-      bytesByTag: (_PigeonJniCodec.readValue(jniClass.bytesByTag)! as Map<Object?, Object?>).cast<String, int>(),
-    );
+    return jniClass == null
+        ? null
+        : WireCacheStats(
+            totalEntries: jniClass.totalEntries,
+            totalBytes: jniClass.totalBytes,
+            expiredEntries: jniClass.expiredEntries,
+            pinnedEntries: jniClass.pinnedEntries,
+            maxDiskCacheBytes: jniClass.maxDiskCacheBytes,
+            cacheDirectoryPath: jniClass.cacheDirectoryPath.toDartString(
+              releaseOriginal: true,
+            ),
+            hitCount: jniClass.hitCount,
+            missCount: jniClass.missCount,
+            evictionCount: jniClass.evictionCount,
+            bytesByTag:
+                (_PigeonJniCodec.readValue(jniClass.bytesByTag)!
+                        as Map<Object?, Object?>)
+                    .cast<String, int>(),
+          );
   }
 
   ffi_bridge.WireCacheStatsBridge toFfi() {
@@ -1106,7 +1378,9 @@ extension PigeonInternalWireCacheStatsNativeInterop on WireCacheStats {
       expiredEntries: expiredEntries,
       pinnedEntries: pinnedEntries,
       maxDiskCacheBytes: maxDiskCacheBytes,
-      cacheDirectoryPath: _PigeonFfiCodec.writeValue<NSString>(cacheDirectoryPath),
+      cacheDirectoryPath: _PigeonFfiCodec.writeValue<NSString>(
+        cacheDirectoryPath,
+      ),
       hitCount: hitCount,
       missCount: missCount,
       evictionCount: evictionCount,
@@ -1115,24 +1389,30 @@ extension PigeonInternalWireCacheStatsNativeInterop on WireCacheStats {
   }
 
   static WireCacheStats? fromFfi(ffi_bridge.WireCacheStatsBridge? ffiClass) {
-    return ffiClass == null ? null : WireCacheStats(
-      totalEntries: ffiClass.totalEntries,
-      totalBytes: ffiClass.totalBytes,
-      expiredEntries: ffiClass.expiredEntries,
-      pinnedEntries: ffiClass.pinnedEntries,
-      maxDiskCacheBytes: ffiClass.maxDiskCacheBytes,
-      cacheDirectoryPath: ffiClass.cacheDirectoryPath.toDartString(),
-      hitCount: ffiClass.hitCount,
-      missCount: ffiClass.missCount,
-      evictionCount: ffiClass.evictionCount,
-      bytesByTag: (_PigeonFfiCodec.readValue(ffiClass.bytesByTag, null, int)! as Map<Object?, Object?>).cast<String, int>(),
-    );
+    return ffiClass == null
+        ? null
+        : WireCacheStats(
+            totalEntries: ffiClass.totalEntries,
+            totalBytes: ffiClass.totalBytes,
+            expiredEntries: ffiClass.expiredEntries,
+            pinnedEntries: ffiClass.pinnedEntries,
+            maxDiskCacheBytes: ffiClass.maxDiskCacheBytes,
+            cacheDirectoryPath: ffiClass.cacheDirectoryPath.toDartString(),
+            hitCount: ffiClass.hitCount,
+            missCount: ffiClass.missCount,
+            evictionCount: ffiClass.evictionCount,
+            bytesByTag:
+                (_PigeonFfiCodec.readValue(ffiClass.bytesByTag, null, int)!
+                        as Map<Object?, Object?>)
+                    .cast<String, int>(),
+          );
   }
 }
 
-extension PigeonInternalWireCachePlatformCapabilitiesNativeInterop on WireCachePlatformCapabilities {
+extension PigeonInternalWireCachePlatformCapabilitiesNativeInterop
+    on WireCachePlatformCapabilities {
   jni_bridge.WireCachePlatformCapabilities toJni() {
-    return jni_bridge.WireCachePlatformCapabilities (
+    return jni_bridge.WireCachePlatformCapabilities(
       _PigeonJniCodec.writeValue<JString>(platformName),
       supportsFileSystemPaths,
       supportsConditionalHttpRevalidation,
@@ -1143,40 +1423,64 @@ extension PigeonInternalWireCachePlatformCapabilitiesNativeInterop on WireCacheP
     );
   }
 
-  static WireCachePlatformCapabilities? fromJni(jni_bridge.WireCachePlatformCapabilities? jniClass) {
-    return jniClass == null ? null : WireCachePlatformCapabilities(
-      platformName: jniClass.platformName.toDartString(releaseOriginal: true),
-      supportsFileSystemPaths: jniClass.supportsFileSystemPaths,
-      supportsConditionalHttpRevalidation: jniClass.supportsConditionalHttpRevalidation,
-      supportsNativeCryptoHash: jniClass.supportsNativeCryptoHash,
-      supportsLowDiskSpaceNotifications: jniClass.supportsLowDiskSpaceNotifications,
-      storageMechanism: jniClass.storageMechanism.toDartString(releaseOriginal: true),
-      defaultCacheRootPath: jniClass.defaultCacheRootPath.toDartString(releaseOriginal: true),
-    );
+  static WireCachePlatformCapabilities? fromJni(
+    jni_bridge.WireCachePlatformCapabilities? jniClass,
+  ) {
+    return jniClass == null
+        ? null
+        : WireCachePlatformCapabilities(
+            platformName: jniClass.platformName.toDartString(
+              releaseOriginal: true,
+            ),
+            supportsFileSystemPaths: jniClass.supportsFileSystemPaths,
+            supportsConditionalHttpRevalidation:
+                jniClass.supportsConditionalHttpRevalidation,
+            supportsNativeCryptoHash: jniClass.supportsNativeCryptoHash,
+            supportsLowDiskSpaceNotifications:
+                jniClass.supportsLowDiskSpaceNotifications,
+            storageMechanism: jniClass.storageMechanism.toDartString(
+              releaseOriginal: true,
+            ),
+            defaultCacheRootPath: jniClass.defaultCacheRootPath.toDartString(
+              releaseOriginal: true,
+            ),
+          );
   }
 
   ffi_bridge.WireCachePlatformCapabilitiesBridge toFfi() {
-    return ffi_bridge.WireCachePlatformCapabilitiesBridge.alloc().initWithPlatformName(
-      _PigeonFfiCodec.writeValue<NSString>(platformName),
-      supportsFileSystemPaths: supportsFileSystemPaths,
-      supportsConditionalHttpRevalidation: supportsConditionalHttpRevalidation,
-      supportsNativeCryptoHash: supportsNativeCryptoHash,
-      supportsLowDiskSpaceNotifications: supportsLowDiskSpaceNotifications,
-      storageMechanism: _PigeonFfiCodec.writeValue<NSString>(storageMechanism),
-      defaultCacheRootPath: _PigeonFfiCodec.writeValue<NSString>(defaultCacheRootPath),
-    );
+    return ffi_bridge.WireCachePlatformCapabilitiesBridge.alloc()
+        .initWithPlatformName(
+          _PigeonFfiCodec.writeValue<NSString>(platformName),
+          supportsFileSystemPaths: supportsFileSystemPaths,
+          supportsConditionalHttpRevalidation:
+              supportsConditionalHttpRevalidation,
+          supportsNativeCryptoHash: supportsNativeCryptoHash,
+          supportsLowDiskSpaceNotifications: supportsLowDiskSpaceNotifications,
+          storageMechanism: _PigeonFfiCodec.writeValue<NSString>(
+            storageMechanism,
+          ),
+          defaultCacheRootPath: _PigeonFfiCodec.writeValue<NSString>(
+            defaultCacheRootPath,
+          ),
+        );
   }
 
-  static WireCachePlatformCapabilities? fromFfi(ffi_bridge.WireCachePlatformCapabilitiesBridge? ffiClass) {
-    return ffiClass == null ? null : WireCachePlatformCapabilities(
-      platformName: ffiClass.platformName.toDartString(),
-      supportsFileSystemPaths: ffiClass.supportsFileSystemPaths,
-      supportsConditionalHttpRevalidation: ffiClass.supportsConditionalHttpRevalidation,
-      supportsNativeCryptoHash: ffiClass.supportsNativeCryptoHash,
-      supportsLowDiskSpaceNotifications: ffiClass.supportsLowDiskSpaceNotifications,
-      storageMechanism: ffiClass.storageMechanism.toDartString(),
-      defaultCacheRootPath: ffiClass.defaultCacheRootPath.toDartString(),
-    );
+  static WireCachePlatformCapabilities? fromFfi(
+    ffi_bridge.WireCachePlatformCapabilitiesBridge? ffiClass,
+  ) {
+    return ffiClass == null
+        ? null
+        : WireCachePlatformCapabilities(
+            platformName: ffiClass.platformName.toDartString(),
+            supportsFileSystemPaths: ffiClass.supportsFileSystemPaths,
+            supportsConditionalHttpRevalidation:
+                ffiClass.supportsConditionalHttpRevalidation,
+            supportsNativeCryptoHash: ffiClass.supportsNativeCryptoHash,
+            supportsLowDiskSpaceNotifications:
+                ffiClass.supportsLowDiskSpaceNotifications,
+            storageMechanism: ffiClass.storageMechanism.toDartString(),
+            defaultCacheRootPath: ffiClass.defaultCacheRootPath.toDartString(),
+          );
   }
 }
 
@@ -1184,15 +1488,20 @@ CacheHostApiForNativeInterop? pigeon_getInstance_CacheHostApi({
   String channelName = defaultInstanceName,
 }) => _CacheHostApiForNativeInterop.getInstance(channelName: channelName);
 
-
 class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
-  _CacheHostApiForNativeInterop._withRegistrar({jni_bridge.CacheHostApiRegistrar? jniApi, ffi_bridge.CacheHostApiSetup? ffiApi}) : _jniApi = jniApi, _ffiApi = ffiApi;
+  _CacheHostApiForNativeInterop._withRegistrar({
+    jni_bridge.CacheHostApiRegistrar? jniApi,
+    ffi_bridge.CacheHostApiSetup? ffiApi,
+  }) : _jniApi = jniApi,
+       _ffiApi = ffiApi;
 
   /// Returns instance of CacheHostApiForNativeInterop with specified [channelName] if one has been registered.
   ///
   /// Returns the instance registered by this isolate's engine when it is known,
   /// and otherwise the most recent registration.
-  static CacheHostApiForNativeInterop? getInstance({String channelName = defaultInstanceName}) {
+  static CacheHostApiForNativeInterop? getInstance({
+    String channelName = defaultInstanceName,
+  }) {
     if (Platform.isAndroid) {
       final int? engineId = PlatformDispatcher.instance.engineId;
       final JString jName = channelName.toJString();
@@ -1210,8 +1519,10 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
         _throwNoInstanceError(channelName);
       }
       if (link != null && _pigeonEngineAffinity == null) {
-        final int linkEngineKey = jni_bridge.CacheHostApiRegistrar.pigeonEngineKeyOf(link);
-        if (linkEngineKey != _pigeonNoEngineKey && (engineId == null || linkEngineKey < 0)) {
+        final int linkEngineKey =
+            jni_bridge.CacheHostApiRegistrar.pigeonEngineKeyOf(link);
+        if (linkEngineKey != _pigeonNoEngineKey &&
+            (engineId == null || linkEngineKey < 0)) {
           _pigeonEngineAffinity = linkEngineKey;
           _pigeonUpdateFlutterApiEngineAffinity();
         }
@@ -1219,24 +1530,29 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       return _CacheHostApiForNativeInterop._withRegistrar(jniApi: link);
     } else if (Platform.isIOS || Platform.isMacOS) {
       final int? engineId = PlatformDispatcher.instance.engineId;
-      final ffi_bridge.CacheHostApiSetup? link = ffi_bridge.CacheHostApiSetup.pigeonResolveInstanceWithEngineId(
-        engineId ?? _pigeonNoEngineKey,
-        affinityKey: _pigeonEngineAffinity ?? _pigeonNoEngineKey,
-        name: NSString(channelName),
-      );
+      final ffi_bridge.CacheHostApiSetup? link =
+          ffi_bridge.CacheHostApiSetup.pigeonResolveInstanceWithEngineId(
+            engineId ?? _pigeonNoEngineKey,
+            affinityKey: _pigeonEngineAffinity ?? _pigeonNoEngineKey,
+            name: NSString(channelName),
+          );
       if (link == null) {
         _throwNoInstanceError(channelName);
       }
       if (link != null && _pigeonEngineAffinity == null) {
-        final int linkEngineKey = ffi_bridge.CacheHostApiSetup.pigeonEngineKeyOf(link);
-        if (linkEngineKey != _pigeonNoEngineKey && (engineId == null || linkEngineKey < 0)) {
+        final int linkEngineKey =
+            ffi_bridge.CacheHostApiSetup.pigeonEngineKeyOf(link);
+        if (linkEngineKey != _pigeonNoEngineKey &&
+            (engineId == null || linkEngineKey < 0)) {
           _pigeonEngineAffinity = linkEngineKey;
           _pigeonUpdateFlutterApiEngineAffinity();
         }
       }
       return _CacheHostApiForNativeInterop._withRegistrar(ffiApi: link);
     } else {
-      throw UnsupportedError('Native Interop is not supported on this platform. Use CacheHostApi instead.');
+      throw UnsupportedError(
+        'Native Interop is not supported on this platform. Use CacheHostApi instead.',
+      );
     }
   }
 
@@ -1247,7 +1563,9 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
   Future<void> configure(WireCacheManagerConfig config) async {
     try {
       if (_jniApi != null) {
-        final JByteArray pigeonVar_args = _PigeonJniBuffers.encode(<Object?>[config]);
+        final JByteArray pigeonVar_args = _PigeonJniBuffers.encode(<Object?>[
+          config,
+        ]);
         try {
           await _jniApi.configure(pigeonVar_args);
           return;
@@ -1256,15 +1574,21 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
         }
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final NSData pigeonVar_args = _PigeonFfiBuffers.encode(<Object?>[config]);
+        final NSData pigeonVar_args = _PigeonFfiBuffers.encode(<Object?>[
+          config,
+        ]);
         final Completer<void> pigeonVar_completer = Completer<void>();
-        _ffiApi.configureWithPigeonVar_args(pigeonVar_args, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid.listener(() {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete();
-          }
-        }));
+        _ffiApi.configureWithPigeonVar_args(
+          pigeonVar_args,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid.listener(() {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete();
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1278,24 +1602,41 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
   Future<WireCacheFetchResult> downloadFile(WireCacheRequest request) async {
     try {
       if (_jniApi != null) {
-        final JByteArray pigeonVar_args = _PigeonJniBuffers.encode(<Object?>[request]);
+        final JByteArray pigeonVar_args = _PigeonJniBuffers.encode(<Object?>[
+          request,
+        ]);
         try {
-          final JByteArray? pigeonVar_res = await _jniApi.downloadFile(pigeonVar_args);
-          return _PigeonJniBuffers.decode(pigeonVar_res)! as WireCacheFetchResult;
+          final JByteArray? pigeonVar_res = await _jniApi.downloadFile(
+            pigeonVar_args,
+          );
+          return _PigeonJniBuffers.decode(pigeonVar_res)!
+              as WireCacheFetchResult;
         } finally {
           pigeonVar_args.release();
         }
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final NSData pigeonVar_args = _PigeonFfiBuffers.encode(<Object?>[request]);
-        final Completer<WireCacheFetchResult> pigeonVar_completer = Completer<WireCacheFetchResult>();
-        _ffiApi.downloadFileWithPigeonVar_args(pigeonVar_args, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((NSData? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(_PigeonFfiBuffers.decode(pigeonVar_res)! as WireCacheFetchResult);
-          }
-        }));
+        final NSData pigeonVar_args = _PigeonFfiBuffers.encode(<Object?>[
+          request,
+        ]);
+        final Completer<WireCacheFetchResult> pigeonVar_completer =
+            Completer<WireCacheFetchResult>();
+        _ffiApi.downloadFileWithPigeonVar_args(
+          pigeonVar_args,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((
+            NSData? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(
+                _PigeonFfiBuffers.decode(pigeonVar_res)!
+                    as WireCacheFetchResult,
+              );
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1306,27 +1647,46 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
   }
 
   @override
-  Future<List<WireCacheEntry>> prefetchAll(List<WireCacheRequest> requests) async {
+  Future<List<WireCacheEntry>> prefetchAll(
+    List<WireCacheRequest> requests,
+  ) async {
     try {
       if (_jniApi != null) {
-        final JByteArray pigeonVar_args = _PigeonJniBuffers.encode(<Object?>[requests]);
+        final JByteArray pigeonVar_args = _PigeonJniBuffers.encode(<Object?>[
+          requests,
+        ]);
         try {
-          final JByteArray? pigeonVar_res = await _jniApi.prefetchAll(pigeonVar_args);
-          return (_PigeonJniBuffers.decode(pigeonVar_res)! as List<Object?>).cast<WireCacheEntry>();
+          final JByteArray? pigeonVar_res = await _jniApi.prefetchAll(
+            pigeonVar_args,
+          );
+          return (_PigeonJniBuffers.decode(pigeonVar_res)! as List<Object?>)
+              .cast<WireCacheEntry>();
         } finally {
           pigeonVar_args.release();
         }
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final NSData pigeonVar_args = _PigeonFfiBuffers.encode(<Object?>[requests]);
-        final Completer<List<WireCacheEntry>> pigeonVar_completer = Completer<List<WireCacheEntry>>();
-        _ffiApi.prefetchAllWithPigeonVar_args(pigeonVar_args, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((NSData? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete((_PigeonFfiBuffers.decode(pigeonVar_res)! as List<Object?>).cast<WireCacheEntry>());
-          }
-        }));
+        final NSData pigeonVar_args = _PigeonFfiBuffers.encode(<Object?>[
+          requests,
+        ]);
+        final Completer<List<WireCacheEntry>> pigeonVar_completer =
+            Completer<List<WireCacheEntry>>();
+        _ffiApi.prefetchAllWithPigeonVar_args(
+          pigeonVar_args,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((
+            NSData? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(
+                (_PigeonFfiBuffers.decode(pigeonVar_res)! as List<Object?>)
+                    .cast<WireCacheEntry>(),
+              );
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1348,7 +1708,10 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
         }
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final NSNumber? pigeonVar_res = _ffiApi.cancelDownloadWithKeyOrUrl(NSString(keyOrUrl), wrappedError: pigeonVar_error);
+        final NSNumber? pigeonVar_res = _ffiApi.cancelDownloadWithKeyOrUrl(
+          NSString(keyOrUrl),
+          wrappedError: pigeonVar_error,
+        );
         _throwIfFfiError(pigeonVar_error);
         return pigeonVar_res!.boolValue;
       } else {
@@ -1360,26 +1723,42 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
   }
 
   @override
-  Future<WireCacheEntry?> getFileFromCache(String keyOrUrl, bool ignoreExpired) async {
+  Future<WireCacheEntry?> getFileFromCache(
+    String keyOrUrl,
+    bool ignoreExpired,
+  ) async {
     try {
       if (_jniApi != null) {
         final JString pigeonVar_arg_keyOrUrl = keyOrUrl.toJString();
         try {
-          final JByteArray? pigeonVar_res = await _jniApi.getFileFromCache(pigeonVar_arg_keyOrUrl, ignoreExpired);
+          final JByteArray? pigeonVar_res = await _jniApi.getFileFromCache(
+            pigeonVar_arg_keyOrUrl,
+            ignoreExpired,
+          );
           return _PigeonJniBuffers.decode(pigeonVar_res) as WireCacheEntry?;
         } finally {
           pigeonVar_arg_keyOrUrl.release();
         }
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final Completer<WireCacheEntry?> pigeonVar_completer = Completer<WireCacheEntry?>();
-        _ffiApi.getFileFromCacheWithKeyOrUrl(NSString(keyOrUrl), ignoreExpired: ignoreExpired, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((NSData? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(_PigeonFfiBuffers.decode(pigeonVar_res) as WireCacheEntry?);
-          }
-        }));
+        final Completer<WireCacheEntry?> pigeonVar_completer =
+            Completer<WireCacheEntry?>();
+        _ffiApi.getFileFromCacheWithKeyOrUrl(
+          NSString(keyOrUrl),
+          ignoreExpired: ignoreExpired,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((
+            NSData? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(
+                _PigeonFfiBuffers.decode(pigeonVar_res) as WireCacheEntry?,
+              );
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1395,21 +1774,34 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       if (_jniApi != null) {
         final JString pigeonVar_arg_keyOrUrl = keyOrUrl.toJString();
         try {
-          final JByteArray? pigeonVar_res = await _jniApi.readCacheBytes(pigeonVar_arg_keyOrUrl, ignoreExpired);
+          final JByteArray? pigeonVar_res = await _jniApi.readCacheBytes(
+            pigeonVar_arg_keyOrUrl,
+            ignoreExpired,
+          );
           return _jByteArrayToDart(pigeonVar_res, release: true);
         } finally {
           pigeonVar_arg_keyOrUrl.release();
         }
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final Completer<Uint8List?> pigeonVar_completer = Completer<Uint8List?>();
-        _ffiApi.readCacheBytesWithKeyOrUrl(NSString(keyOrUrl), ignoreExpired: ignoreExpired, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((NSData? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(_PigeonFfiBuffers.toUint8List(pigeonVar_res));
-          }
-        }));
+        final Completer<Uint8List?> pigeonVar_completer =
+            Completer<Uint8List?>();
+        _ffiApi.readCacheBytesWithKeyOrUrl(
+          NSString(keyOrUrl),
+          ignoreExpired: ignoreExpired,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((
+            NSData? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(
+                _PigeonFfiBuffers.toUint8List(pigeonVar_res),
+              );
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1425,7 +1817,10 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       if (_jniApi != null) {
         final JString pigeonVar_arg_keyOrUrl = keyOrUrl.toJString();
         try {
-          final JBoolean pigeonVar_res = await _jniApi.containsKey(pigeonVar_arg_keyOrUrl, ignoreExpired);
+          final JBoolean pigeonVar_res = await _jniApi.containsKey(
+            pigeonVar_arg_keyOrUrl,
+            ignoreExpired,
+          );
           return pigeonVar_res.toDartBool(releaseOriginal: true);
         } finally {
           pigeonVar_arg_keyOrUrl.release();
@@ -1433,13 +1828,20 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
         final Completer<bool> pigeonVar_completer = Completer<bool>();
-        _ffiApi.containsKeyWithKeyOrUrl(NSString(keyOrUrl), ignoreExpired: ignoreExpired, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((NSNumber? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(pigeonVar_res!.boolValue);
-          }
-        }));
+        _ffiApi.containsKeyWithKeyOrUrl(
+          NSString(keyOrUrl),
+          ignoreExpired: ignoreExpired,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((
+            NSNumber? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(pigeonVar_res!.boolValue);
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1450,7 +1852,16 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
   }
 
   @override
-  Future<WireCacheEntry> putBytes(String key, Uint8List bytes, String? url, String? fileExtension, String? mimeType, String? tag, int? ttlSeconds, bool pinned) async {
+  Future<WireCacheEntry> putBytes(
+    String key,
+    Uint8List bytes,
+    String? url,
+    String? fileExtension,
+    String? mimeType,
+    String? tag,
+    int? ttlSeconds,
+    bool pinned,
+  ) async {
     try {
       if (_jniApi != null) {
         final JString pigeonVar_arg_key = key.toJString();
@@ -1459,9 +1870,20 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
         final JString? pigeonVar_arg_fileExtension = fileExtension?.toJString();
         final JString? pigeonVar_arg_mimeType = mimeType?.toJString();
         final JString? pigeonVar_arg_tag = tag?.toJString();
-        final JLong? pigeonVar_arg_ttlSeconds = ttlSeconds == null ? null : JLong(ttlSeconds);
+        final JLong? pigeonVar_arg_ttlSeconds = ttlSeconds == null
+            ? null
+            : JLong(ttlSeconds);
         try {
-          final JByteArray? pigeonVar_res = await _jniApi.putBytes(pigeonVar_arg_key, pigeonVar_arg_bytes, pigeonVar_arg_url, pigeonVar_arg_fileExtension, pigeonVar_arg_mimeType, pigeonVar_arg_tag, pigeonVar_arg_ttlSeconds, pinned);
+          final JByteArray? pigeonVar_res = await _jniApi.putBytes(
+            pigeonVar_arg_key,
+            pigeonVar_arg_bytes,
+            pigeonVar_arg_url,
+            pigeonVar_arg_fileExtension,
+            pigeonVar_arg_mimeType,
+            pigeonVar_arg_tag,
+            pigeonVar_arg_ttlSeconds,
+            pinned,
+          );
           return _PigeonJniBuffers.decode(pigeonVar_res)! as WireCacheEntry;
         } finally {
           pigeonVar_arg_key.release();
@@ -1474,14 +1896,30 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
         }
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final Completer<WireCacheEntry> pigeonVar_completer = Completer<WireCacheEntry>();
-        _ffiApi.putBytesWithKey(NSString(key), bytes: _typedDataToNSData(bytes), url: url == null ? null : NSString(url), fileExtension: fileExtension == null ? null : NSString(fileExtension), mimeType: mimeType == null ? null : NSString(mimeType), tag: tag == null ? null : NSString(tag), ttlSeconds: _PigeonFfiCodec.writeValue<NSNumber?>(ttlSeconds), pinned: pinned, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((NSData? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(_PigeonFfiBuffers.decode(pigeonVar_res)! as WireCacheEntry);
-          }
-        }));
+        final Completer<WireCacheEntry> pigeonVar_completer =
+            Completer<WireCacheEntry>();
+        _ffiApi.putBytesWithKey(
+          NSString(key),
+          bytes: _typedDataToNSData(bytes),
+          url: url == null ? null : NSString(url),
+          fileExtension: fileExtension == null ? null : NSString(fileExtension),
+          mimeType: mimeType == null ? null : NSString(mimeType),
+          tag: tag == null ? null : NSString(tag),
+          ttlSeconds: _PigeonFfiCodec.writeValue<NSNumber?>(ttlSeconds),
+          pinned: pinned,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((
+            NSData? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(
+                _PigeonFfiBuffers.decode(pigeonVar_res)! as WireCacheEntry,
+              );
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1492,7 +1930,16 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
   }
 
   @override
-  Future<WireCacheEntry> putFile(String key, String sourceFilePath, String? url, String? fileExtension, String? mimeType, String? tag, int? ttlSeconds, bool pinned) async {
+  Future<WireCacheEntry> putFile(
+    String key,
+    String sourceFilePath,
+    String? url,
+    String? fileExtension,
+    String? mimeType,
+    String? tag,
+    int? ttlSeconds,
+    bool pinned,
+  ) async {
     try {
       if (_jniApi != null) {
         final JString pigeonVar_arg_key = key.toJString();
@@ -1501,9 +1948,20 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
         final JString? pigeonVar_arg_fileExtension = fileExtension?.toJString();
         final JString? pigeonVar_arg_mimeType = mimeType?.toJString();
         final JString? pigeonVar_arg_tag = tag?.toJString();
-        final JLong? pigeonVar_arg_ttlSeconds = ttlSeconds == null ? null : JLong(ttlSeconds);
+        final JLong? pigeonVar_arg_ttlSeconds = ttlSeconds == null
+            ? null
+            : JLong(ttlSeconds);
         try {
-          final JByteArray? pigeonVar_res = await _jniApi.putFile(pigeonVar_arg_key, pigeonVar_arg_sourceFilePath, pigeonVar_arg_url, pigeonVar_arg_fileExtension, pigeonVar_arg_mimeType, pigeonVar_arg_tag, pigeonVar_arg_ttlSeconds, pinned);
+          final JByteArray? pigeonVar_res = await _jniApi.putFile(
+            pigeonVar_arg_key,
+            pigeonVar_arg_sourceFilePath,
+            pigeonVar_arg_url,
+            pigeonVar_arg_fileExtension,
+            pigeonVar_arg_mimeType,
+            pigeonVar_arg_tag,
+            pigeonVar_arg_ttlSeconds,
+            pinned,
+          );
           return _PigeonJniBuffers.decode(pigeonVar_res)! as WireCacheEntry;
         } finally {
           pigeonVar_arg_key.release();
@@ -1516,14 +1974,30 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
         }
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final Completer<WireCacheEntry> pigeonVar_completer = Completer<WireCacheEntry>();
-        _ffiApi.putFileWithKey(NSString(key), sourceFilePath: NSString(sourceFilePath), url: url == null ? null : NSString(url), fileExtension: fileExtension == null ? null : NSString(fileExtension), mimeType: mimeType == null ? null : NSString(mimeType), tag: tag == null ? null : NSString(tag), ttlSeconds: _PigeonFfiCodec.writeValue<NSNumber?>(ttlSeconds), pinned: pinned, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((NSData? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(_PigeonFfiBuffers.decode(pigeonVar_res)! as WireCacheEntry);
-          }
-        }));
+        final Completer<WireCacheEntry> pigeonVar_completer =
+            Completer<WireCacheEntry>();
+        _ffiApi.putFileWithKey(
+          NSString(key),
+          sourceFilePath: NSString(sourceFilePath),
+          url: url == null ? null : NSString(url),
+          fileExtension: fileExtension == null ? null : NSString(fileExtension),
+          mimeType: mimeType == null ? null : NSString(mimeType),
+          tag: tag == null ? null : NSString(tag),
+          ttlSeconds: _PigeonFfiCodec.writeValue<NSNumber?>(ttlSeconds),
+          pinned: pinned,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((
+            NSData? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(
+                _PigeonFfiBuffers.decode(pigeonVar_res)! as WireCacheEntry,
+              );
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1539,7 +2013,10 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       if (_jniApi != null) {
         final JString pigeonVar_arg_keyOrUrl = keyOrUrl.toJString();
         try {
-          final JBoolean pigeonVar_res = await _jniApi.setPinned(pigeonVar_arg_keyOrUrl, pinned);
+          final JBoolean pigeonVar_res = await _jniApi.setPinned(
+            pigeonVar_arg_keyOrUrl,
+            pinned,
+          );
           return pigeonVar_res.toDartBool(releaseOriginal: true);
         } finally {
           pigeonVar_arg_keyOrUrl.release();
@@ -1547,13 +2024,20 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
         final Completer<bool> pigeonVar_completer = Completer<bool>();
-        _ffiApi.setPinnedWithKeyOrUrl(NSString(keyOrUrl), pinned: pinned, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((NSNumber? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(pigeonVar_res!.boolValue);
-          }
-        }));
+        _ffiApi.setPinnedWithKeyOrUrl(
+          NSString(keyOrUrl),
+          pinned: pinned,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((
+            NSNumber? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(pigeonVar_res!.boolValue);
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1569,7 +2053,9 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       if (_jniApi != null) {
         final JString pigeonVar_arg_keyOrUrl = keyOrUrl.toJString();
         try {
-          final JBoolean pigeonVar_res = await _jniApi.removeFile(pigeonVar_arg_keyOrUrl);
+          final JBoolean pigeonVar_res = await _jniApi.removeFile(
+            pigeonVar_arg_keyOrUrl,
+          );
           return pigeonVar_res.toDartBool(releaseOriginal: true);
         } finally {
           pigeonVar_arg_keyOrUrl.release();
@@ -1577,13 +2063,19 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
         final Completer<bool> pigeonVar_completer = Completer<bool>();
-        _ffiApi.removeFileWithKeyOrUrl(NSString(keyOrUrl), wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((NSNumber? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(pigeonVar_res!.boolValue);
-          }
-        }));
+        _ffiApi.removeFileWithKeyOrUrl(
+          NSString(keyOrUrl),
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((
+            NSNumber? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(pigeonVar_res!.boolValue);
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1599,7 +2091,9 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       if (_jniApi != null) {
         final JString pigeonVar_arg_tag = tag.toJString();
         try {
-          final JLong pigeonVar_res = await _jniApi.removeByTag(pigeonVar_arg_tag);
+          final JLong pigeonVar_res = await _jniApi.removeByTag(
+            pigeonVar_arg_tag,
+          );
           return pigeonVar_res.toDartInt(releaseOriginal: true);
         } finally {
           pigeonVar_arg_tag.release();
@@ -1607,13 +2101,19 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
         final Completer<int> pigeonVar_completer = Completer<int>();
-        _ffiApi.removeByTagWithTag(NSString(tag), wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((NSNumber? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(pigeonVar_res!.longValue);
-          }
-        }));
+        _ffiApi.removeByTagWithTag(
+          NSString(tag),
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((
+            NSNumber? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(pigeonVar_res!.longValue);
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1632,13 +2132,18 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
         final Completer<int> pigeonVar_completer = Completer<int>();
-        _ffiApi.removeExpiredWithWrappedError(pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((NSNumber? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(pigeonVar_res!.longValue);
-          }
-        }));
+        _ffiApi.removeExpiredWithWrappedError(
+          pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((
+            NSNumber? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(pigeonVar_res!.longValue);
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1657,13 +2162,19 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
         final Completer<int> pigeonVar_completer = Completer<int>();
-        _ffiApi.trimToSizeWithMaxBytes(maxBytes, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((NSNumber? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(pigeonVar_res!.longValue);
-          }
-        }));
+        _ffiApi.trimToSizeWithMaxBytes(
+          maxBytes,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((
+            NSNumber? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(pigeonVar_res!.longValue);
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1682,13 +2193,19 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
         final Completer<int> pigeonVar_completer = Completer<int>();
-        _ffiApi.clearAllWithIncludePinned(includePinned, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((NSNumber? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(pigeonVar_res!.longValue);
-          }
-        }));
+        _ffiApi.clearAllWithIncludePinned(
+          includePinned,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSNumber.listener((
+            NSNumber? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(pigeonVar_res!.longValue);
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1699,26 +2216,44 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
   }
 
   @override
-  Future<List<WireCacheEntry>> listEntries(String? tag, bool includeExpired) async {
+  Future<List<WireCacheEntry>> listEntries(
+    String? tag,
+    bool includeExpired,
+  ) async {
     try {
       if (_jniApi != null) {
         final JString? pigeonVar_arg_tag = tag?.toJString();
         try {
-          final JByteArray? pigeonVar_res = await _jniApi.listEntries(pigeonVar_arg_tag, includeExpired);
-          return (_PigeonJniBuffers.decode(pigeonVar_res)! as List<Object?>).cast<WireCacheEntry>();
+          final JByteArray? pigeonVar_res = await _jniApi.listEntries(
+            pigeonVar_arg_tag,
+            includeExpired,
+          );
+          return (_PigeonJniBuffers.decode(pigeonVar_res)! as List<Object?>)
+              .cast<WireCacheEntry>();
         } finally {
           pigeonVar_arg_tag?.release();
         }
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final Completer<List<WireCacheEntry>> pigeonVar_completer = Completer<List<WireCacheEntry>>();
-        _ffiApi.listEntriesWithTag(tag == null ? null : NSString(tag), includeExpired: includeExpired, wrappedError: pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((NSData? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete((_PigeonFfiBuffers.decode(pigeonVar_res)! as List<Object?>).cast<WireCacheEntry>());
-          }
-        }));
+        final Completer<List<WireCacheEntry>> pigeonVar_completer =
+            Completer<List<WireCacheEntry>>();
+        _ffiApi.listEntriesWithTag(
+          tag == null ? null : NSString(tag),
+          includeExpired: includeExpired,
+          wrappedError: pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((
+            NSData? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(
+                (_PigeonFfiBuffers.decode(pigeonVar_res)! as List<Object?>)
+                    .cast<WireCacheEntry>(),
+              );
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1736,14 +2271,22 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
         return _PigeonJniBuffers.decode(pigeonVar_res)! as WireCacheStats;
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final Completer<WireCacheStats> pigeonVar_completer = Completer<WireCacheStats>();
-        _ffiApi.getStatsWithWrappedError(pigeonVar_error, completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((NSData? pigeonVar_res) {
-          if (pigeonVar_error.code != null) {
-            pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
-          } else {
-            pigeonVar_completer.complete(_PigeonFfiBuffers.decode(pigeonVar_res)! as WireCacheStats);
-          }
-        }));
+        final Completer<WireCacheStats> pigeonVar_completer =
+            Completer<WireCacheStats>();
+        _ffiApi.getStatsWithWrappedError(
+          pigeonVar_error,
+          completionHandler: ffi_bridge.ObjCBlock_ffiVoid_NSData.listener((
+            NSData? pigeonVar_res,
+          ) {
+            if (pigeonVar_error.code != null) {
+              pigeonVar_completer.completeError(_wrapFfiError(pigeonVar_error));
+            } else {
+              pigeonVar_completer.complete(
+                _PigeonFfiBuffers.decode(pigeonVar_res)! as WireCacheStats,
+              );
+            }
+          }),
+        );
         return await pigeonVar_completer.future;
       } else {
         throw Exception('No JNI or FFI api available');
@@ -1758,12 +2301,16 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
     try {
       if (_jniApi != null) {
         final JByteArray? pigeonVar_res = _jniApi.capabilities;
-        return _PigeonJniBuffers.decode(pigeonVar_res)! as WireCachePlatformCapabilities;
+        return _PigeonJniBuffers.decode(pigeonVar_res)!
+            as WireCachePlatformCapabilities;
       } else if (_ffiApi != null) {
         final pigeonVar_error = ffi_bridge.PigeonError();
-        final NSData? pigeonVar_res = _ffiApi.getCapabilitiesWithWrappedError(pigeonVar_error);
+        final NSData? pigeonVar_res = _ffiApi.getCapabilitiesWithWrappedError(
+          pigeonVar_error,
+        );
         _throwIfFfiError(pigeonVar_error);
-        return _PigeonFfiBuffers.decode(pigeonVar_res)! as WireCachePlatformCapabilities;
+        return _PigeonFfiBuffers.decode(pigeonVar_res)!
+            as WireCachePlatformCapabilities;
       } else {
         throw Exception('No JNI or FFI api available');
       }
@@ -1771,19 +2318,27 @@ class _CacheHostApiForNativeInterop implements CacheHostApiForNativeInterop {
       throw _wrapJniException(e);
     }
   }
-
 }
 
-final class _CacheProgressFlutterApiRegistrar with jni_bridge.$CacheProgressFlutterApiBridge {
+final class _CacheProgressFlutterApiRegistrar
+    with jni_bridge.$CacheProgressFlutterApiBridge {
   _CacheProgressFlutterApiRegistrar(this.pigeonVar_dartApi);
 
-  static final Map<String, List<(CacheProgressFlutterApi, Object)>> pigeonVar_registeredHandles = <String, List<(CacheProgressFlutterApi, Object)>>{};
-  static final Map<String, CacheProgressFlutterApi> pigeonVar_setUpInstances = <String, CacheProgressFlutterApi>{};
+  static final Map<String, List<(CacheProgressFlutterApi, Object)>>
+  pigeonVar_registeredHandles =
+      <String, List<(CacheProgressFlutterApi, Object)>>{};
+  static final Map<String, CacheProgressFlutterApi> pigeonVar_setUpInstances =
+      <String, CacheProgressFlutterApi>{};
 
   final CacheProgressFlutterApi pigeonVar_dartApi;
 
-  static void pigeonVar_setUp(CacheProgressFlutterApi? api, {String name = defaultInstanceName}) {
-    final CacheProgressFlutterApi? previous = pigeonVar_setUpInstances.remove(name);
+  static void pigeonVar_setUp(
+    CacheProgressFlutterApi? api, {
+    String name = defaultInstanceName,
+  }) {
+    final CacheProgressFlutterApi? previous = pigeonVar_setUpInstances.remove(
+      name,
+    );
     if (previous != null && !identical(previous, api)) {
       pigeonVar_unregister(previous, name: name);
     }
@@ -1793,15 +2348,22 @@ final class _CacheProgressFlutterApiRegistrar with jni_bridge.$CacheProgressFlut
     }
   }
 
-  static void pigeonVar_unregister(CacheProgressFlutterApi api, {String name = defaultInstanceName}) {
+  static void pigeonVar_unregister(
+    CacheProgressFlutterApi api, {
+    String name = defaultInstanceName,
+  }) {
     if (identical(pigeonVar_setUpInstances[name], api)) {
       pigeonVar_setUpInstances.remove(name);
     }
     pigeonVar_removeHandle(api, name: name);
   }
 
-  static void pigeonVar_removeHandle(CacheProgressFlutterApi api, {String name = defaultInstanceName}) {
-    final List<(CacheProgressFlutterApi, Object)>? handles = pigeonVar_registeredHandles[name];
+  static void pigeonVar_removeHandle(
+    CacheProgressFlutterApi api, {
+    String name = defaultInstanceName,
+  }) {
+    final List<(CacheProgressFlutterApi, Object)>? handles =
+        pigeonVar_registeredHandles[name];
     if (handles == null || handles.isEmpty) {
       return;
     }
@@ -1820,7 +2382,8 @@ final class _CacheProgressFlutterApiRegistrar with jni_bridge.$CacheProgressFlut
     }
     if (Platform.isAndroid) {
       final JString jName = name.toJString();
-      final jni_bridge.CacheProgressFlutterApiRegistrar registrar = jni_bridge.CacheProgressFlutterApiRegistrar();
+      final jni_bridge.CacheProgressFlutterApiRegistrar registrar =
+          jni_bridge.CacheProgressFlutterApiRegistrar();
       try {
         registrar.unregisterInstance(
           removedHandle as jni_bridge.CacheProgressFlutterApiBridge,
@@ -1844,14 +2407,19 @@ final class _CacheProgressFlutterApiRegistrar with jni_bridge.$CacheProgressFlut
     }
   }
 
-  CacheProgressFlutterApi pigeonVar_register({String name = defaultInstanceName}) {
+  CacheProgressFlutterApi pigeonVar_register({
+    String name = defaultInstanceName,
+  }) {
     pigeonVar_removeHandle(pigeonVar_dartApi, name: name);
-    final int engineId = PlatformDispatcher.instance.engineId ?? _pigeonNoEngineKey;
+    final int engineId =
+        PlatformDispatcher.instance.engineId ?? _pigeonNoEngineKey;
     final int affinityKey = _pigeonEngineAffinity ?? _pigeonNoEngineKey;
     if (Platform.isAndroid) {
-      final jni_bridge.CacheProgressFlutterApiBridge impl = jni_bridge.CacheProgressFlutterApiBridge.implement(this);
+      final jni_bridge.CacheProgressFlutterApiBridge impl =
+          jni_bridge.CacheProgressFlutterApiBridge.implement(this);
       final JString jName = name.toJString();
-      final jni_bridge.CacheProgressFlutterApiRegistrar registrar = jni_bridge.CacheProgressFlutterApiRegistrar();
+      final jni_bridge.CacheProgressFlutterApiRegistrar registrar =
+          jni_bridge.CacheProgressFlutterApiRegistrar();
       try {
         registrar.registerInstance(impl, engineId, affinityKey, jName);
       } catch (_) {
@@ -1861,37 +2429,64 @@ final class _CacheProgressFlutterApiRegistrar with jni_bridge.$CacheProgressFlut
         registrar.release();
         jName.release();
       }
-      (pigeonVar_registeredHandles[name] ??= <(CacheProgressFlutterApi, Object)>[]).add((pigeonVar_dartApi, impl));
+      (pigeonVar_registeredHandles[name] ??=
+              <(CacheProgressFlutterApi, Object)>[])
+          .add((pigeonVar_dartApi, impl));
     }
     if (Platform.isIOS || Platform.isMacOS) {
-
-      final ObjCProtocolBuilder builder = ObjCProtocolBuilder(debugName: 'CacheProgressFlutterApiBridge');
-      ffi_bridge.CacheProgressFlutterApiBridge$Builder.onProgressWithPigeonVar_args_error_completionHandler_.implementAsListener(builder, (NSData pigeonVar_args, ffi_bridge.PigeonError errorOut, ObjCBlock<Void Function()> completionHandler) {
-        try {
-          final List<Object?> pigeonVar_decodedArgs = _PigeonFfiBuffers.decode(pigeonVar_args)! as List<Object?>;
-          pigeonVar_dartApi.onProgress(pigeonVar_decodedArgs[0]! as WireCacheProgressEvent).then((response) {
-            ffi_bridge.ObjCBlock_ffiVoid$CallExtension(completionHandler).call();
-          },
-          onError: (Object e) {
-            _reportFfiError(errorOut, e);
-            ffi_bridge.ObjCBlock_ffiVoid$CallExtension(completionHandler).call();
+      final ObjCProtocolBuilder builder = ObjCProtocolBuilder(
+        debugName: 'CacheProgressFlutterApiBridge',
+      );
+      ffi_bridge
+          .CacheProgressFlutterApiBridge$Builder
+          .onProgressWithPigeonVar_args_error_completionHandler_
+          .implementAsListener(builder, (
+            NSData pigeonVar_args,
+            ffi_bridge.PigeonError errorOut,
+            ObjCBlock<Void Function()> completionHandler,
+          ) {
+            try {
+              final List<Object?> pigeonVar_decodedArgs =
+                  _PigeonFfiBuffers.decode(pigeonVar_args)! as List<Object?>;
+              pigeonVar_dartApi
+                  .onProgress(
+                    pigeonVar_decodedArgs[0]! as WireCacheProgressEvent,
+                  )
+                  .then(
+                    (response) {
+                      ffi_bridge.ObjCBlock_ffiVoid$CallExtension(
+                        completionHandler,
+                      ).call();
+                    },
+                    onError: (Object e) {
+                      _reportFfiError(errorOut, e);
+                      ffi_bridge.ObjCBlock_ffiVoid$CallExtension(
+                        completionHandler,
+                      ).call();
+                    },
+                  );
+              return;
+            } catch (e) {
+              _reportFfiError(errorOut, e);
+              ffi_bridge.ObjCBlock_ffiVoid$CallExtension(completionHandler)
+                  .call();
+              return;
+            }
           });
-          return;
-        } catch (e) {
-          _reportFfiError(errorOut, e);
-          ffi_bridge.ObjCBlock_ffiVoid$CallExtension(completionHandler).call();
-          return;
-        }
-      });
-      builder.addProtocol(ffi_bridge.CacheProgressFlutterApiBridge$Builder.$protocol);
-      final ffi_bridge.CacheProgressFlutterApiBridge impl = ffi_bridge.CacheProgressFlutterApiBridge.as(builder.build());
+      builder.addProtocol(
+        ffi_bridge.CacheProgressFlutterApiBridge$Builder.$protocol,
+      );
+      final ffi_bridge.CacheProgressFlutterApiBridge impl =
+          ffi_bridge.CacheProgressFlutterApiBridge.as(builder.build());
       ffi_bridge.CacheProgressFlutterApiRegistrar.registerInstanceWithApi(
         impl,
         engineId: engineId,
         affinityKey: affinityKey,
         name: NSString(name),
       );
-      (pigeonVar_registeredHandles[name] ??= <(CacheProgressFlutterApi, Object)>[]).add((pigeonVar_dartApi, impl));
+      (pigeonVar_registeredHandles[name] ??=
+              <(CacheProgressFlutterApi, Object)>[])
+          .add((pigeonVar_dartApi, impl));
     }
     return pigeonVar_dartApi;
   }
@@ -1901,15 +2496,23 @@ final class _CacheProgressFlutterApiRegistrar with jni_bridge.$CacheProgressFlut
   ///
   /// Native code updates existing registrations in place.
   static void pigeonVar_updateEngineAffinity() {
-    final int engineId = PlatformDispatcher.instance.engineId ?? _pigeonNoEngineKey;
+    final int engineId =
+        PlatformDispatcher.instance.engineId ?? _pigeonNoEngineKey;
     final int affinityKey = _pigeonEngineAffinity ?? _pigeonNoEngineKey;
-    for (final MapEntry<String, List<(CacheProgressFlutterApi, Object)>> entry in pigeonVar_registeredHandles.entries) {
+    for (final MapEntry<String, List<(CacheProgressFlutterApi, Object)>> entry
+        in pigeonVar_registeredHandles.entries) {
       for (final (CacheProgressFlutterApi _, Object handle) in entry.value) {
         if (Platform.isAndroid) {
           final JString jName = entry.key.toJString();
-          final jni_bridge.CacheProgressFlutterApiRegistrar registrar = jni_bridge.CacheProgressFlutterApiRegistrar();
+          final jni_bridge.CacheProgressFlutterApiRegistrar registrar =
+              jni_bridge.CacheProgressFlutterApiRegistrar();
           try {
-            registrar.registerInstance(handle as jni_bridge.CacheProgressFlutterApiBridge, engineId, affinityKey, jName);
+            registrar.registerInstance(
+              handle as jni_bridge.CacheProgressFlutterApiBridge,
+              engineId,
+              affinityKey,
+              jName,
+            );
           } finally {
             registrar.release();
             jName.release();
@@ -1929,10 +2532,13 @@ final class _CacheProgressFlutterApiRegistrar with jni_bridge.$CacheProgressFlut
 
   @override
   Future<JObject> onProgress(JByteArray pigeonVar_args) {
-    final List<Object?> pigeonVar_decodedArgs = _PigeonJniBuffers.decode(pigeonVar_args)! as List<Object?>;
-    return pigeonVar_dartApi.onProgress(pigeonVar_decodedArgs[0]! as WireCacheProgressEvent).then((response) {
-      return _PigeonJniCodec._kotlinUnit;
-    });
+    final List<Object?> pigeonVar_decodedArgs =
+        _PigeonJniBuffers.decode(pigeonVar_args)! as List<Object?>;
+    return pigeonVar_dartApi
+        .onProgress(pigeonVar_decodedArgs[0]! as WireCacheProgressEvent)
+        .then((response) {
+          return _PigeonJniCodec._kotlinUnit;
+        });
   }
 }
 
@@ -1950,4 +2556,3 @@ void pigeon_set_up_CacheProgressFlutterApi(
   CacheProgressFlutterApi? api, {
   String name = defaultInstanceName,
 }) => _CacheProgressFlutterApiRegistrar.pigeonVar_setUp(api, name: name);
-

@@ -13,11 +13,11 @@ const String _macosObjcGenDir =
 Future<void> main(List<String> args) async {
   final bool verifyDiff = args.contains('--verify-darwin-ffi-diff');
 
-  stdout.writeln('[pigeon] Running Pass 1 (Dart, iOS FFI, Android JNI, Windows C++, Linux GObject)...');
+  stdout.writeln(
+    '[pigeon] Running Pass 1 (Dart, iOS FFI, Android JNI, Windows C++, Linux GObject)...',
+  );
   final int pass1Exit = await Pigeon.runWithOptions(
-    const PigeonOptions(
-      input: _inputPath,
-    ),
+    const PigeonOptions(input: _inputPath),
   );
   _cleanupObjectFiles(_iosObjcGenDir);
   if (pass1Exit != 0) {
@@ -26,7 +26,9 @@ Future<void> main(List<String> args) async {
   }
 
   if (Platform.isMacOS) {
-    stdout.writeln('[pigeon] Running Pass 2 (independent macOS Swift FFI + _objc_gen)...');
+    stdout.writeln(
+      '[pigeon] Running Pass 2 (independent macOS Swift FFI + _objc_gen)...',
+    );
     final String? macosSdkPath = _resolveMacosSdkPath();
     final String macosTriple = _resolveMacosTriple();
 
@@ -40,8 +42,7 @@ Future<void> main(List<String> args) async {
           configDirectory: tempConfigDir,
           dartOut: '$tempDartDir/cache_messages.g.dart',
           dartOptions: const DartOptions(),
-          swiftOut:
-              'macos/xue_hua_navite_cache_manager/Sources/xue_hua_navite_cache_manager/CacheMessages.g.swift',
+          swiftOut: 'macos/xue_hua_navite_cache_manager/Sources/xue_hua_navite_cache_manager/CacheMessages.g.swift',
           swiftOptions: SwiftOptions(
             useFfi: true,
             ffiModuleName: 'xue_hua_navite_cache_manager',
@@ -80,10 +81,11 @@ Future<void> main(List<String> args) async {
 }
 
 String? _resolveMacosSdkPath() {
-  final ProcessResult result = Process.runSync(
-    'xcrun',
-    <String>['--sdk', 'macosx', '--show-sdk-path'],
-  );
+  final ProcessResult result = Process.runSync('xcrun', <String>[
+    '--sdk',
+    'macosx',
+    '--show-sdk-path',
+  ]);
   if (result.exitCode != 0) {
     return null;
   }

@@ -8,15 +8,17 @@ import 'dart:typed_data' show Float64List, Int32List, Int64List;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
-import 'package:meta/meta.dart' show immutable, internal, protected, visibleForTesting;
+import 'package:meta/meta.dart'
+    show immutable, internal, protected, visibleForTesting;
+
 import './cache_messages.g.dart'
     if (dart.library.ffi) './cache_messages.native_interop.g.dart'
     as pigeon_native;
 
 Object? _extractReplyValueOrThrow(
-    List<Object?>? replyList,
-    String channelName, {
-    required bool isNullValid,
+  List<Object?>? replyList,
+  String channelName, {
+  required bool isNullValid,
 }) {
   if (replyList == null) {
     throw PlatformException(
@@ -38,8 +40,11 @@ Object? _extractReplyValueOrThrow(
   return replyList.firstOrNull;
 }
 
-
-List<Object?> wrapResponse({Object? result, PlatformException? error, bool empty = false}) {
+List<Object?> wrapResponse({
+  Object? result,
+  PlatformException? error,
+  bool empty = false,
+}) {
   if (empty) {
     return <Object?>[];
   }
@@ -48,6 +53,7 @@ List<Object?> wrapResponse({Object? result, PlatformException? error, bool empty
   }
   return <Object?>[error.code, error.message, error.details];
 }
+
 bool _deepEquals(Object? a, Object? b) {
   if (identical(a, b)) {
     return true;
@@ -60,8 +66,9 @@ bool _deepEquals(Object? a, Object? b) {
   }
   if (a is List && b is List) {
     return a.length == b.length &&
-        a.indexed
-            .every(((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]));
+        a.indexed.every(
+          ((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]),
+        );
   }
   if (a is Map && b is Map) {
     if (a.length != b.length) {
@@ -110,25 +117,15 @@ int _deepHash(Object? value) {
   return value.hashCode;
 }
 
+enum WireCacheChecksumAlgorithm { none, md5, sha256 }
 
-enum WireCacheChecksumAlgorithm {
-  none,
-  md5,
-  sha256;
-}
-
-enum WireCacheEvictionPolicy {
-  lru,
-  lfu,
-  fifo,
-  ttlOnly;
-}
+enum WireCacheEvictionPolicy { lru, lfu, fifo, ttlOnly }
 
 enum WireCacheResultSource {
   cacheHit,
   revalidated,
   networkDownload,
-  staleCacheFallback;
+  staleCacheFallback,
 }
 
 enum WireCacheTransferState {
@@ -137,7 +134,7 @@ enum WireCacheTransferState {
   cacheHit,
   completed,
   canceled,
-  failed;
+  failed,
 }
 
 class WireCacheManagerConfig {
@@ -194,7 +191,8 @@ class WireCacheManagerConfig {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static WireCacheManagerConfig decode(Object result) {
     result as List<Object?>;
@@ -207,7 +205,8 @@ class WireCacheManagerConfig {
       maxConcurrentDownloads: result[5]! as int,
       connectTimeoutMs: result[6]! as int,
       readTimeoutMs: result[7]! as int,
-      defaultHeaders: (result[8]! as Map<Object?, Object?>).cast<String, String>(),
+      defaultHeaders: (result[8]! as Map<Object?, Object?>)
+          .cast<String, String>(),
       respectHttpCacheHeaders: result[9]! as bool,
       autoTrimOnWrite: result[10]! as bool,
     );
@@ -222,7 +221,17 @@ class WireCacheManagerConfig {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(maxDiskCacheBytes, other.maxDiskCacheBytes) && _deepEquals(maxEntries, other.maxEntries) && _deepEquals(defaultTtlSeconds, other.defaultTtlSeconds) && _deepEquals(evictionPolicy, other.evictionPolicy) && _deepEquals(cacheSubdirectory, other.cacheSubdirectory) && _deepEquals(maxConcurrentDownloads, other.maxConcurrentDownloads) && _deepEquals(connectTimeoutMs, other.connectTimeoutMs) && _deepEquals(readTimeoutMs, other.readTimeoutMs) && _deepEquals(defaultHeaders, other.defaultHeaders) && _deepEquals(respectHttpCacheHeaders, other.respectHttpCacheHeaders) && _deepEquals(autoTrimOnWrite, other.autoTrimOnWrite);
+    return _deepEquals(maxDiskCacheBytes, other.maxDiskCacheBytes) &&
+        _deepEquals(maxEntries, other.maxEntries) &&
+        _deepEquals(defaultTtlSeconds, other.defaultTtlSeconds) &&
+        _deepEquals(evictionPolicy, other.evictionPolicy) &&
+        _deepEquals(cacheSubdirectory, other.cacheSubdirectory) &&
+        _deepEquals(maxConcurrentDownloads, other.maxConcurrentDownloads) &&
+        _deepEquals(connectTimeoutMs, other.connectTimeoutMs) &&
+        _deepEquals(readTimeoutMs, other.readTimeoutMs) &&
+        _deepEquals(defaultHeaders, other.defaultHeaders) &&
+        _deepEquals(respectHttpCacheHeaders, other.respectHttpCacheHeaders) &&
+        _deepEquals(autoTrimOnWrite, other.autoTrimOnWrite);
   }
 
   @override
@@ -289,7 +298,8 @@ class WireCacheRequest {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static WireCacheRequest decode(Object result) {
     result as List<Object?>;
@@ -317,7 +327,17 @@ class WireCacheRequest {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(url, other.url) && _deepEquals(customKey, other.customKey) && _deepEquals(tag, other.tag) && _deepEquals(fileExtension, other.fileExtension) && _deepEquals(headers, other.headers) && _deepEquals(ttlSeconds, other.ttlSeconds) && _deepEquals(forceRefresh, other.forceRefresh) && _deepEquals(fallbackToCacheOnError, other.fallbackToCacheOnError) && _deepEquals(pinned, other.pinned) && _deepEquals(checksumAlgorithm, other.checksumAlgorithm) && _deepEquals(expectedChecksum, other.expectedChecksum);
+    return _deepEquals(url, other.url) &&
+        _deepEquals(customKey, other.customKey) &&
+        _deepEquals(tag, other.tag) &&
+        _deepEquals(fileExtension, other.fileExtension) &&
+        _deepEquals(headers, other.headers) &&
+        _deepEquals(ttlSeconds, other.ttlSeconds) &&
+        _deepEquals(forceRefresh, other.forceRefresh) &&
+        _deepEquals(fallbackToCacheOnError, other.fallbackToCacheOnError) &&
+        _deepEquals(pinned, other.pinned) &&
+        _deepEquals(checksumAlgorithm, other.checksumAlgorithm) &&
+        _deepEquals(expectedChecksum, other.expectedChecksum);
   }
 
   @override
@@ -400,7 +420,8 @@ class WireCacheEntry {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static WireCacheEntry decode(Object result) {
     result as List<Object?>;
@@ -432,7 +453,21 @@ class WireCacheEntry {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(key, other.key) && _deepEquals(url, other.url) && _deepEquals(filePath, other.filePath) && _deepEquals(sizeBytes, other.sizeBytes) && _deepEquals(createdAtMs, other.createdAtMs) && _deepEquals(lastAccessedAtMs, other.lastAccessedAtMs) && _deepEquals(expiresAtMs, other.expiresAtMs) && _deepEquals(hitCount, other.hitCount) && _deepEquals(tag, other.tag) && _deepEquals(mimeType, other.mimeType) && _deepEquals(eTag, other.eTag) && _deepEquals(lastModified, other.lastModified) && _deepEquals(checksum, other.checksum) && _deepEquals(checksumAlgorithm, other.checksumAlgorithm) && _deepEquals(pinned, other.pinned);
+    return _deepEquals(key, other.key) &&
+        _deepEquals(url, other.url) &&
+        _deepEquals(filePath, other.filePath) &&
+        _deepEquals(sizeBytes, other.sizeBytes) &&
+        _deepEquals(createdAtMs, other.createdAtMs) &&
+        _deepEquals(lastAccessedAtMs, other.lastAccessedAtMs) &&
+        _deepEquals(expiresAtMs, other.expiresAtMs) &&
+        _deepEquals(hitCount, other.hitCount) &&
+        _deepEquals(tag, other.tag) &&
+        _deepEquals(mimeType, other.mimeType) &&
+        _deepEquals(eTag, other.eTag) &&
+        _deepEquals(lastModified, other.lastModified) &&
+        _deepEquals(checksum, other.checksum) &&
+        _deepEquals(checksumAlgorithm, other.checksumAlgorithm) &&
+        _deepEquals(pinned, other.pinned);
   }
 
   @override
@@ -462,16 +497,12 @@ class WireCacheFetchResult {
   int elapsedMs;
 
   List<Object?> _toList() {
-    return <Object?>[
-      entry,
-      source,
-      httpStatusCode,
-      elapsedMs,
-    ];
+    return <Object?>[entry, source, httpStatusCode, elapsedMs];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static WireCacheFetchResult decode(Object result) {
     result as List<Object?>;
@@ -492,7 +523,10 @@ class WireCacheFetchResult {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(entry, other.entry) && _deepEquals(source, other.source) && _deepEquals(httpStatusCode, other.httpStatusCode) && _deepEquals(elapsedMs, other.elapsedMs);
+    return _deepEquals(entry, other.entry) &&
+        _deepEquals(source, other.source) &&
+        _deepEquals(httpStatusCode, other.httpStatusCode) &&
+        _deepEquals(elapsedMs, other.elapsedMs);
   }
 
   @override
@@ -543,7 +577,8 @@ class WireCacheProgressEvent {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static WireCacheProgressEvent decode(Object result) {
     result as List<Object?>;
@@ -567,7 +602,13 @@ class WireCacheProgressEvent {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(key, other.key) && _deepEquals(url, other.url) && _deepEquals(state, other.state) && _deepEquals(bytesReceived, other.bytesReceived) && _deepEquals(totalBytes, other.totalBytes) && _deepEquals(filePath, other.filePath) && _deepEquals(errorMessage, other.errorMessage);
+    return _deepEquals(key, other.key) &&
+        _deepEquals(url, other.url) &&
+        _deepEquals(state, other.state) &&
+        _deepEquals(bytesReceived, other.bytesReceived) &&
+        _deepEquals(totalBytes, other.totalBytes) &&
+        _deepEquals(filePath, other.filePath) &&
+        _deepEquals(errorMessage, other.errorMessage);
   }
 
   @override
@@ -630,7 +671,8 @@ class WireCacheStats {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static WireCacheStats decode(Object result) {
     result as List<Object?>;
@@ -657,7 +699,16 @@ class WireCacheStats {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(totalEntries, other.totalEntries) && _deepEquals(totalBytes, other.totalBytes) && _deepEquals(expiredEntries, other.expiredEntries) && _deepEquals(pinnedEntries, other.pinnedEntries) && _deepEquals(maxDiskCacheBytes, other.maxDiskCacheBytes) && _deepEquals(cacheDirectoryPath, other.cacheDirectoryPath) && _deepEquals(hitCount, other.hitCount) && _deepEquals(missCount, other.missCount) && _deepEquals(evictionCount, other.evictionCount) && _deepEquals(bytesByTag, other.bytesByTag);
+    return _deepEquals(totalEntries, other.totalEntries) &&
+        _deepEquals(totalBytes, other.totalBytes) &&
+        _deepEquals(expiredEntries, other.expiredEntries) &&
+        _deepEquals(pinnedEntries, other.pinnedEntries) &&
+        _deepEquals(maxDiskCacheBytes, other.maxDiskCacheBytes) &&
+        _deepEquals(cacheDirectoryPath, other.cacheDirectoryPath) &&
+        _deepEquals(hitCount, other.hitCount) &&
+        _deepEquals(missCount, other.missCount) &&
+        _deepEquals(evictionCount, other.evictionCount) &&
+        _deepEquals(bytesByTag, other.bytesByTag);
   }
 
   @override
@@ -708,7 +759,8 @@ class WireCachePlatformCapabilities {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static WireCachePlatformCapabilities decode(Object result) {
     result as List<Object?>;
@@ -726,13 +778,26 @@ class WireCachePlatformCapabilities {
   @override
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
   bool operator ==(Object other) {
-    if (other is! WireCachePlatformCapabilities || other.runtimeType != runtimeType) {
+    if (other is! WireCachePlatformCapabilities ||
+        other.runtimeType != runtimeType) {
       return false;
     }
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(platformName, other.platformName) && _deepEquals(supportsFileSystemPaths, other.supportsFileSystemPaths) && _deepEquals(supportsConditionalHttpRevalidation, other.supportsConditionalHttpRevalidation) && _deepEquals(supportsNativeCryptoHash, other.supportsNativeCryptoHash) && _deepEquals(supportsLowDiskSpaceNotifications, other.supportsLowDiskSpaceNotifications) && _deepEquals(storageMechanism, other.storageMechanism) && _deepEquals(defaultCacheRootPath, other.defaultCacheRootPath);
+    return _deepEquals(platformName, other.platformName) &&
+        _deepEquals(supportsFileSystemPaths, other.supportsFileSystemPaths) &&
+        _deepEquals(
+          supportsConditionalHttpRevalidation,
+          other.supportsConditionalHttpRevalidation,
+        ) &&
+        _deepEquals(supportsNativeCryptoHash, other.supportsNativeCryptoHash) &&
+        _deepEquals(
+          supportsLowDiskSpaceNotifications,
+          other.supportsLowDiskSpaceNotifications,
+        ) &&
+        _deepEquals(storageMechanism, other.storageMechanism) &&
+        _deepEquals(defaultCacheRootPath, other.defaultCacheRootPath);
   }
 
   @override
@@ -745,7 +810,6 @@ class WireCachePlatformCapabilities {
   }
 }
 
-
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
   @override
@@ -753,37 +817,37 @@ class _PigeonCodec extends StandardMessageCodec {
     if (value is int) {
       buffer.putUint8(4);
       buffer.putInt64(value);
-    }    else if (value is WireCacheChecksumAlgorithm) {
+    } else if (value is WireCacheChecksumAlgorithm) {
       buffer.putUint8(129);
       writeValue(buffer, value.index);
-    }    else if (value is WireCacheEvictionPolicy) {
+    } else if (value is WireCacheEvictionPolicy) {
       buffer.putUint8(130);
       writeValue(buffer, value.index);
-    }    else if (value is WireCacheResultSource) {
+    } else if (value is WireCacheResultSource) {
       buffer.putUint8(131);
       writeValue(buffer, value.index);
-    }    else if (value is WireCacheTransferState) {
+    } else if (value is WireCacheTransferState) {
       buffer.putUint8(132);
       writeValue(buffer, value.index);
-    }    else if (value is WireCacheManagerConfig) {
+    } else if (value is WireCacheManagerConfig) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
-    }    else if (value is WireCacheRequest) {
+    } else if (value is WireCacheRequest) {
       buffer.putUint8(134);
       writeValue(buffer, value.encode());
-    }    else if (value is WireCacheEntry) {
+    } else if (value is WireCacheEntry) {
       buffer.putUint8(135);
       writeValue(buffer, value.encode());
-    }    else if (value is WireCacheFetchResult) {
+    } else if (value is WireCacheFetchResult) {
       buffer.putUint8(136);
       writeValue(buffer, value.encode());
-    }    else if (value is WireCacheProgressEvent) {
+    } else if (value is WireCacheProgressEvent) {
       buffer.putUint8(137);
       writeValue(buffer, value.encode());
-    }    else if (value is WireCacheStats) {
+    } else if (value is WireCacheStats) {
       buffer.putUint8(138);
       writeValue(buffer, value.encode());
-    }    else if (value is WireCachePlatformCapabilities) {
+    } else if (value is WireCachePlatformCapabilities) {
       buffer.putUint8(139);
       writeValue(buffer, value.encode());
     } else {
@@ -828,7 +892,8 @@ class _PigeonCodec extends StandardMessageCodec {
 
 @internal
 const StandardMessageCodec pigeon_CacheMessagesmessageCodec = _PigeonCodec();
-const String defaultInstanceName = 'PigeonDefaultClassName32uh4ui3lh445uh4h3l2l455g4y34u';
+const String defaultInstanceName =
+    'PigeonDefaultClassName32uh4ui3lh445uh4h3l2l455g4y34u';
 
 @internal
 CacheHostApiForNativeInterop? pigeon_getInstance_CacheHostApi({
@@ -839,11 +904,11 @@ CacheHostApiForNativeInterop? pigeon_getInstance_CacheHostApi({
   );
 }
 
-
 abstract class CacheHostApiForNativeInterop {
   /// Returns instance of CacheHostApiForNativeInterop with specified [channelName] if one has been registered.
-  static CacheHostApiForNativeInterop? getInstance({String channelName = defaultInstanceName}) =>
-      pigeon_native.pigeon_getInstance_CacheHostApi(channelName: channelName);
+  static CacheHostApiForNativeInterop? getInstance({
+    String channelName = defaultInstanceName,
+  }) => pigeon_native.pigeon_getInstance_CacheHostApi(channelName: channelName);
 
   Future<void> configure(WireCacheManagerConfig config);
 
@@ -859,9 +924,27 @@ abstract class CacheHostApiForNativeInterop {
 
   Future<bool> containsKey(String keyOrUrl, bool ignoreExpired);
 
-  Future<WireCacheEntry> putBytes(String key, Uint8List bytes, String? url, String? fileExtension, String? mimeType, String? tag, int? ttlSeconds, bool pinned);
+  Future<WireCacheEntry> putBytes(
+    String key,
+    Uint8List bytes,
+    String? url,
+    String? fileExtension,
+    String? mimeType,
+    String? tag,
+    int? ttlSeconds,
+    bool pinned,
+  );
 
-  Future<WireCacheEntry> putFile(String key, String sourceFilePath, String? url, String? fileExtension, String? mimeType, String? tag, int? ttlSeconds, bool pinned);
+  Future<WireCacheEntry> putFile(
+    String key,
+    String sourceFilePath,
+    String? url,
+    String? fileExtension,
+    String? mimeType,
+    String? tag,
+    int? ttlSeconds,
+    bool pinned,
+  );
 
   Future<bool> setPinned(String keyOrUrl, bool pinned);
 
@@ -887,14 +970,14 @@ class CacheHostApi {
   /// available for dependency injection. If it is left null, the default
   /// BinaryMessenger will be used which routes to the host platform.
   CacheHostApi({
-      BinaryMessenger? binaryMessenger, 
-      String messageChannelSuffix = '', 
-      CacheHostApiForNativeInterop? nativeInteropApi,
-  })
-      : pigeonVar_binaryMessenger = binaryMessenger,
-        pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '',
-  _nativeInteropApi = nativeInteropApi;
-
+    BinaryMessenger? binaryMessenger,
+    String messageChannelSuffix = '',
+    CacheHostApiForNativeInterop? nativeInteropApi,
+  }) : pigeonVar_binaryMessenger = binaryMessenger,
+       pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty
+           ? '.$messageChannelSuffix'
+           : '',
+       _nativeInteropApi = nativeInteropApi;
 
   /// Creates an instance of [CacheHostApi] that requests an instance of
   /// [CacheHostApiForNativeInterop] from the host platform with a matching instance name
@@ -912,8 +995,10 @@ class CacheHostApi {
     }
     final CacheHostApiForNativeInterop? nativeInteropApi =
         CacheHostApiForNativeInterop.getInstance(
-      channelName: messageChannelSuffix.isEmpty ? defaultInstanceName : messageChannelSuffix,
-    );
+          channelName: messageChannelSuffix.isEmpty
+              ? defaultInstanceName
+              : messageChannelSuffix,
+        );
     if (nativeInteropApi == null) {
       throw ArgumentError(
         'No CacheHostApi instance with ${messageChannelSuffix.isEmpty ? 'no ' : ''}instance name ${messageChannelSuffix.isNotEmpty ? '"$messageChannelSuffix" ' : ''}found.',
@@ -937,61 +1022,69 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.configure(config);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.configure$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.configure$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[config]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[config],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 
   Future<WireCacheFetchResult> downloadFile(WireCacheRequest request) async {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.downloadFile(request);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.downloadFile$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.downloadFile$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[request]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[request],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as WireCacheFetchResult;
   }
 
-  Future<List<WireCacheEntry>> prefetchAll(List<WireCacheRequest> requests) async {
+  Future<List<WireCacheEntry>> prefetchAll(
+    List<WireCacheRequest> requests,
+  ) async {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.prefetchAll(requests);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.prefetchAll$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.prefetchAll$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[requests]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[requests],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return (pigeonVar_replyValue! as List<Object?>).cast<WireCacheEntry>();
   }
 
@@ -999,41 +1092,48 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.cancelDownload(keyOrUrl);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.cancelDownload$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.cancelDownload$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[keyOrUrl]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[keyOrUrl],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as bool;
   }
 
-  Future<WireCacheEntry?> getFileFromCache(String keyOrUrl, bool ignoreExpired) async {
+  Future<WireCacheEntry?> getFileFromCache(
+    String keyOrUrl,
+    bool ignoreExpired,
+  ) async {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.getFileFromCache(keyOrUrl, ignoreExpired);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.getFileFromCache$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.getFileFromCache$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[keyOrUrl, ignoreExpired]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[keyOrUrl, ignoreExpired],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
     return pigeonVar_replyValue as WireCacheEntry?;
   }
 
@@ -1041,20 +1141,22 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.readCacheBytes(keyOrUrl, ignoreExpired);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.readCacheBytes$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.readCacheBytes$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[keyOrUrl, ignoreExpired]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[keyOrUrl, ignoreExpired],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
     return pigeonVar_replyValue as Uint8List?;
   }
 
@@ -1062,62 +1164,122 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.containsKey(keyOrUrl, ignoreExpired);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.containsKey$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.containsKey$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[keyOrUrl, ignoreExpired]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[keyOrUrl, ignoreExpired],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as bool;
   }
 
-  Future<WireCacheEntry> putBytes(String key, Uint8List bytes, String? url, String? fileExtension, String? mimeType, String? tag, int? ttlSeconds, bool pinned) async {
+  Future<WireCacheEntry> putBytes(
+    String key,
+    Uint8List bytes,
+    String? url,
+    String? fileExtension,
+    String? mimeType,
+    String? tag,
+    int? ttlSeconds,
+    bool pinned,
+  ) async {
     if (_nativeInteropApi != null) {
-      return _nativeInteropApi.putBytes(key, bytes, url, fileExtension, mimeType, tag, ttlSeconds, pinned);
+      return _nativeInteropApi.putBytes(
+        key,
+        bytes,
+        url,
+        fileExtension,
+        mimeType,
+        tag,
+        ttlSeconds,
+        pinned,
+      );
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.putBytes$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.putBytes$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[key, bytes, url, fileExtension, mimeType, tag, ttlSeconds, pinned]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[
+        key,
+        bytes,
+        url,
+        fileExtension,
+        mimeType,
+        tag,
+        ttlSeconds,
+        pinned,
+      ],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as WireCacheEntry;
   }
 
-  Future<WireCacheEntry> putFile(String key, String sourceFilePath, String? url, String? fileExtension, String? mimeType, String? tag, int? ttlSeconds, bool pinned) async {
+  Future<WireCacheEntry> putFile(
+    String key,
+    String sourceFilePath,
+    String? url,
+    String? fileExtension,
+    String? mimeType,
+    String? tag,
+    int? ttlSeconds,
+    bool pinned,
+  ) async {
     if (_nativeInteropApi != null) {
-      return _nativeInteropApi.putFile(key, sourceFilePath, url, fileExtension, mimeType, tag, ttlSeconds, pinned);
+      return _nativeInteropApi.putFile(
+        key,
+        sourceFilePath,
+        url,
+        fileExtension,
+        mimeType,
+        tag,
+        ttlSeconds,
+        pinned,
+      );
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.putFile$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.putFile$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[key, sourceFilePath, url, fileExtension, mimeType, tag, ttlSeconds, pinned]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[
+        key,
+        sourceFilePath,
+        url,
+        fileExtension,
+        mimeType,
+        tag,
+        ttlSeconds,
+        pinned,
+      ],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as WireCacheEntry;
   }
 
@@ -1125,20 +1287,22 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.setPinned(keyOrUrl, pinned);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.setPinned$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.setPinned$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[keyOrUrl, pinned]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[keyOrUrl, pinned],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as bool;
   }
 
@@ -1146,20 +1310,22 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.removeFile(keyOrUrl);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.removeFile$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.removeFile$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[keyOrUrl]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[keyOrUrl],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as bool;
   }
 
@@ -1167,20 +1333,22 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.removeByTag(tag);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.removeByTag$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.removeByTag$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[tag]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[tag],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as int;
   }
 
@@ -1188,7 +1356,8 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.removeExpired();
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.removeExpired$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.removeExpired$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -1197,11 +1366,10 @@ class CacheHostApi {
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as int;
   }
 
@@ -1209,20 +1377,22 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.trimToSize(maxBytes);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.trimToSize$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.trimToSize$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[maxBytes]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[maxBytes],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as int;
   }
 
@@ -1230,41 +1400,48 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.clearAll(includePinned);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.clearAll$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.clearAll$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[includePinned]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[includePinned],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as int;
   }
 
-  Future<List<WireCacheEntry>> listEntries(String? tag, bool includeExpired) async {
+  Future<List<WireCacheEntry>> listEntries(
+    String? tag,
+    bool includeExpired,
+  ) async {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.listEntries(tag, includeExpired);
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.listEntries$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.listEntries$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[tag, includeExpired]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[tag, includeExpired],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return (pigeonVar_replyValue! as List<Object?>).cast<WireCacheEntry>();
   }
 
@@ -1272,7 +1449,8 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.getStats();
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.getStats$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.getStats$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -1281,11 +1459,10 @@ class CacheHostApi {
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as WireCacheStats;
   }
 
@@ -1293,7 +1470,8 @@ class CacheHostApi {
     if (_nativeInteropApi != null) {
       return _nativeInteropApi.getCapabilities();
     }
-    final pigeonVar_channelName = 'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.getCapabilities$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheHostApi.getCapabilities$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -1302,11 +1480,10 @@ class CacheHostApi {
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as WireCachePlatformCapabilities;
   }
 }
@@ -1352,10 +1529,7 @@ final class CacheProgressFlutterApiRegistrar {
   CacheProgressFlutterApi register(
     CacheProgressFlutterApi api, {
     String name = defaultInstanceName,
-  }) => pigeon_native.pigeon_register_CacheProgressFlutterApi(
-    api,
-    name: name,
-  );
+  }) => pigeon_native.pigeon_register_CacheProgressFlutterApi(api, name: name);
 
   /// Removes [api], registered from this isolate under [name] (or the default
   /// instance when [name] is omitted), leaving other registrations in place.
@@ -1364,47 +1538,53 @@ final class CacheProgressFlutterApiRegistrar {
   void unregister(
     CacheProgressFlutterApi api, {
     String name = defaultInstanceName,
-  }) => pigeon_native.pigeon_unregister_CacheProgressFlutterApi(
-    api,
-    name: name,
-  );
+  }) =>
+      pigeon_native.pigeon_unregister_CacheProgressFlutterApi(api, name: name);
 }
-
 
 abstract class CacheProgressFlutterApi {
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
 
   Future<void> onProgress(WireCacheProgressEvent event);
 
-  static void setUp(CacheProgressFlutterApi? api, {
+  static void setUp(
+    CacheProgressFlutterApi? api, {
     BinaryMessenger? binaryMessenger,
     String messageChannelSuffix = '',
-  }) 
-{
+  }) {
     if (!kIsWeb) {
       pigeon_native.pigeon_set_up_CacheProgressFlutterApi(
         api,
-        name: messageChannelSuffix.isEmpty ? defaultInstanceName : messageChannelSuffix,
+        name: messageChannelSuffix.isEmpty
+            ? defaultInstanceName
+            : messageChannelSuffix,
       );
     }
-    messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
+    messageChannelSuffix = messageChannelSuffix.isNotEmpty
+        ? '.$messageChannelSuffix'
+        : '';
     {
       final pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheProgressFlutterApi.onProgress$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+        'dev.flutter.pigeon.xue_hua_navite_cache_manager.CacheProgressFlutterApi.onProgress$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
         pigeonVar_channel.setMessageHandler((Object? message) async {
           final List<Object?> args = message! as List<Object?>;
-          final WireCacheProgressEvent arg_event = args[0]! as WireCacheProgressEvent;
+          final WireCacheProgressEvent arg_event =
+              args[0]! as WireCacheProgressEvent;
           try {
             await api.onProgress(arg_event);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }
@@ -1413,7 +1593,8 @@ abstract class CacheProgressFlutterApi {
 
   /// Registers [api] for Native Interop callers under [name], or the default
   /// instance when [name] is omitted or empty, and returns [api].
-  static CacheProgressFlutterApi implement(CacheProgressFlutterApi api, {
+  static CacheProgressFlutterApi implement(
+    CacheProgressFlutterApi api, {
     String name = defaultInstanceName,
   }) {
     return CacheProgressFlutterApiRegistrar().register(

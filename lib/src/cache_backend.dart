@@ -46,10 +46,7 @@ abstract interface class CacheBackend {
   });
 
   /// Checks whether a valid cached entry exists for [keyOrUrl].
-  Future<bool> containsKey(
-    String keyOrUrl, {
-    bool ignoreExpired = true,
-  });
+  Future<bool> containsKey(String keyOrUrl, {bool ignoreExpired = true});
 
   /// Stores in-memory [bytes] directly into the cache under [key].
   Future<CacheEntry> putBytes({

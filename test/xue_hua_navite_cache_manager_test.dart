@@ -575,10 +575,7 @@ class _FakePigeonHostApi implements CacheHostApi {
   }
 
   @override
-  Future<Uint8List?> readCacheBytes(
-    String keyOrUrl,
-    bool ignoreExpired,
-  ) async {
+  Future<Uint8List?> readCacheBytes(String keyOrUrl, bool ignoreExpired) async {
     return Uint8List.fromList(<int>[7, 8, 9]);
   }
 
@@ -702,10 +699,7 @@ void main() {
       ),
     );
     expect(fakeHost.lastConfig?.maxDiskCacheBytes, 123456);
-    expect(
-      fakeHost.lastConfig?.evictionPolicy,
-      WireCacheEvictionPolicy.fifo,
-    );
+    expect(fakeHost.lastConfig?.evictionPolicy, WireCacheEvictionPolicy.fifo);
     expect(fakeHost.lastConfig?.defaultHeaders['X-Test'], '1');
 
     final fetchResult = await backend.downloadFile(
@@ -723,7 +717,10 @@ void main() {
         expectedChecksum: 'deadbeef',
       ),
     );
-    expect(fakeHost.lastRequest?.checksumAlgorithm, WireCacheChecksumAlgorithm.md5);
+    expect(
+      fakeHost.lastRequest?.checksumAlgorithm,
+      WireCacheChecksumAlgorithm.md5,
+    );
     expect(fetchResult.source, CacheResultSource.revalidated);
     expect(fetchResult.httpStatusCode, 304);
     expect(fetchResult.entry.key, 'custom_wire');
@@ -1143,28 +1140,22 @@ void main() {
     },
   );
 
-  test(
-    'CacheHashUtils computes standard RFC 1321 MD5 and FIPS 180-4 SHA-256 vectors',
-    () {
-      final emptyBytes = Uint8List(0);
-      expect(
-        CacheHashUtils.md5Hex(emptyBytes),
-        'd41d8cd98f00b204e9800998ecf8427e',
-      );
-      expect(
-        CacheHashUtils.sha256Hex(emptyBytes),
-        'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      );
+  test('CacheHashUtils computes standard RFC 1321 MD5 and FIPS 180-4 SHA-256 vectors', () {
+    final emptyBytes = Uint8List(0);
+    expect(
+      CacheHashUtils.md5Hex(emptyBytes),
+      'd41d8cd98f00b204e9800998ecf8427e',
+    );
+    expect(
+      CacheHashUtils.sha256Hex(emptyBytes),
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    );
 
-      final abcBytes = Uint8List.fromList('abc'.codeUnits);
-      expect(
-        CacheHashUtils.md5Hex(abcBytes),
-        '900150983cd24fb0d6963f7d28e17f72',
-      );
-      expect(
-        CacheHashUtils.sha256Hex(abcBytes),
-        'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
-      );
-    },
-  );
+    final abcBytes = Uint8List.fromList('abc'.codeUnits);
+    expect(CacheHashUtils.md5Hex(abcBytes), '900150983cd24fb0d6963f7d28e17f72');
+    expect(
+      CacheHashUtils.sha256Hex(abcBytes),
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    );
+  });
 }

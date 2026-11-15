@@ -403,7 +403,9 @@ class PigeonCacheBackend implements CacheBackend {
   }
 
   /// Converts a Pigeon wire progress payload to a public [CacheProgressEvent].
-  static CacheProgressEvent fromWireProgressEvent(WireCacheProgressEvent event) {
+  static CacheProgressEvent fromWireProgressEvent(
+    WireCacheProgressEvent event,
+  ) {
     return CacheProgressEvent(
       key: event.key,
       url: event.url,

@@ -8,42 +8,27 @@ import 'package:pigeon/pigeon.dart';
     configDirectory: '.',
     dartOut: 'lib/src/pigeon/cache_messages.g.dart',
     dartOptions: DartOptions(),
-    kotlinOut:
-        'android/src/main/kotlin/com/kurban/xue_hua_navite_cache_manager/CacheMessages.g.kt',
+    kotlinOut: 'android/src/main/kotlin/com/kurban/xue_hua_navite_cache_manager/CacheMessages.g.kt',
     kotlinOptions: KotlinOptions(
       package: 'com.kurban.xue_hua_navite_cache_manager',
       useJni: true,
     ),
-    swiftOut:
-        'ios/xue_hua_navite_cache_manager/Sources/xue_hua_navite_cache_manager/CacheMessages.g.swift',
+    swiftOut: 'ios/xue_hua_navite_cache_manager/Sources/xue_hua_navite_cache_manager/CacheMessages.g.swift',
     swiftOptions: SwiftOptions(
       useFfi: true,
       ffiModuleName: 'xue_hua_navite_cache_manager',
     ),
     cppHeaderOut: 'windows/messages.g.h',
     cppSourceOut: 'windows/messages.g.cpp',
-    cppOptions: CppOptions(
-      namespace: 'xue_hua_navite_cache_manager',
-    ),
+    cppOptions: CppOptions(namespace: 'xue_hua_navite_cache_manager'),
     gobjectHeaderOut: 'linux/messages.g.h',
     gobjectSourceOut: 'linux/messages.g.cc',
-    gobjectOptions: GObjectOptions(
-      module: 'XueHuaCache',
-    ),
+    gobjectOptions: GObjectOptions(module: 'XueHuaCache'),
   ),
 )
-enum WireCacheChecksumAlgorithm {
-  none,
-  md5,
-  sha256,
-}
+enum WireCacheChecksumAlgorithm { none, md5, sha256 }
 
-enum WireCacheEvictionPolicy {
-  lru,
-  lfu,
-  fifo,
-  ttlOnly,
-}
+enum WireCacheEvictionPolicy { lru, lfu, fifo, ttlOnly }
 
 enum WireCacheResultSource {
   cacheHit,

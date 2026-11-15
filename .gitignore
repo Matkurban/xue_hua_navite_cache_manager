@@ -31,3 +31,6 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 /build/
 /coverage/
+/pigeon/
+**/Sources/*_objc_gen/*.o
+*.g.dart.tmp

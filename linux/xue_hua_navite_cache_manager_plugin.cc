@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -18,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <sstream>
 #include <string>
@@ -25,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "messages.g.h"
 #include "xue_hua_navite_cache_manager_plugin_private.h"
 
 #define XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(obj) \
@@ -38,6 +41,106 @@ int64_t CurrentTimeMs() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::system_clock::now().time_since_epoch())
       .count();
+}
+
+std::string AsciiLower(const std::string& in) {
+  std::string out = in;
+  for (char& c : out) {
+    c = static_cast<char>(g_ascii_tolower(static_cast<gchar>(c)));
+  }
+  return out;
+}
+
+std::string TrimAscii(const std::string& in) {
+  size_t begin = 0;
+  while (begin < in.size() &&
+         (in[begin] == ' ' || in[begin] == '\t' || in[begin] == '\r' ||
+          in[begin] == '\n')) {
+    begin++;
+  }
+  size_t end = in.size();
+  while (end > begin &&
+         (in[end - 1] == ' ' || in[end - 1] == '\t' || in[end - 1] == '\r' ||
+          in[end - 1] == '\n')) {
+    end--;
+  }
+  return in.substr(begin, end - begin);
+}
+
+std::string SanitizeTsvField(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (char ch : value) {
+    if (ch == '\t' || ch == '\r' || ch == '\n') {
+      out.push_back(' ');
+    } else {
+      out.push_back(ch);
+    }
+  }
+  return out;
+}
+
+std::string SanitizeHeaderValue(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (char ch : value) {
+    if (ch != '\r' && ch != '\n' && ch != '\0') {
+      out.push_back(ch);
+    }
+  }
+  return out;
+}
+
+std::string SanitizeHeaderName(const std::string& name) {
+  std::string out;
+  out.reserve(name.size());
+  for (char ch : name) {
+    if (ch == ':' || ch == '\r' || ch == '\n' || ch == '\0' ||
+        std::isspace(static_cast<unsigned char>(ch))) {
+      continue;
+    }
+    out.push_back(ch);
+  }
+  return out;
+}
+
+std::string ChecksumAlgToString(XueHuaCacheWireCacheChecksumAlgorithm alg) {
+  switch (alg) {
+    case XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_CHECKSUM_ALGORITHM_MD5:
+      return "md5";
+    case XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_CHECKSUM_ALGORITHM_SHA256:
+      return "sha256";
+    case XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_CHECKSUM_ALGORITHM_NONE:
+    default:
+      return "none";
+  }
+}
+
+XueHuaCacheWireCacheChecksumAlgorithm WireChecksumFromString(
+    const std::string& raw) {
+  const std::string lower = AsciiLower(raw);
+  if (lower == "md5") {
+    return XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_CHECKSUM_ALGORITHM_MD5;
+  }
+  if (lower == "sha256") {
+    return XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_CHECKSUM_ALGORITHM_SHA256;
+  }
+  return XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_CHECKSUM_ALGORITHM_NONE;
+}
+
+std::string EvictionPolicyToString(
+    XueHuaCacheWireCacheEvictionPolicy policy) {
+  switch (policy) {
+    case XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_EVICTION_POLICY_LFU:
+      return "lfu";
+    case XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_EVICTION_POLICY_FIFO:
+      return "fifo";
+    case XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_EVICTION_POLICY_TTL_ONLY:
+      return "ttlOnly";
+    case XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_EVICTION_POLICY_LRU:
+    default:
+      return "lru";
+  }
 }
 
 struct LinuxCacheRecord {
@@ -61,103 +164,44 @@ struct LinuxCacheRecord {
     return expires_at_ms > 0 && now_ms > expires_at_ms;
   }
 
-  FlValue* ToFlValue() const {
-    FlValue* map = fl_value_new_map();
-    fl_value_set_string_take(map, "key", fl_value_new_string(key.c_str()));
-    fl_value_set_string_take(map, "url", fl_value_new_string(url.c_str()));
-    fl_value_set_string_take(map, "filePath",
-                             fl_value_new_string(file_path.c_str()));
-    fl_value_set_string_take(map, "sizeBytes", fl_value_new_int(size_bytes));
-    fl_value_set_string_take(map, "createdAtMs",
-                             fl_value_new_int(created_at_ms));
-    fl_value_set_string_take(map, "lastAccessedAtMs",
-                             fl_value_new_int(last_accessed_at_ms));
-    fl_value_set_string_take(map, "expiresAtMs",
-                             fl_value_new_int(expires_at_ms));
-    fl_value_set_string_take(map, "hitCount", fl_value_new_int(hit_count));
-    fl_value_set_string_take(
-        map, "tag",
-        tag.empty() ? fl_value_new_null() : fl_value_new_string(tag.c_str()));
-    fl_value_set_string_take(map, "mimeType",
-                             mime_type.empty()
-                                 ? fl_value_new_null()
-                                 : fl_value_new_string(mime_type.c_str()));
-    fl_value_set_string_take(map, "eTag",
-                             etag.empty() ? fl_value_new_null()
-                                          : fl_value_new_string(etag.c_str()));
-    fl_value_set_string_take(
-        map, "lastModified",
-        last_modified.empty() ? fl_value_new_null()
-                              : fl_value_new_string(last_modified.c_str()));
-    fl_value_set_string_take(map, "checksum",
-                             checksum.empty()
-                                 ? fl_value_new_null()
-                                 : fl_value_new_string(checksum.c_str()));
-    fl_value_set_string_take(
-        map, "checksumAlgorithm",
-        fl_value_new_string(checksum_algorithm.c_str()));
-    fl_value_set_string_take(map, "pinned", fl_value_new_bool(pinned));
-    return map;
+  XueHuaCacheWireCacheEntry* ToWireEntry() const {
+    return xue_hua_cache_wire_cache_entry_new(
+        key.c_str(), url.c_str(), file_path.c_str(), size_bytes, created_at_ms,
+        last_accessed_at_ms, expires_at_ms, hit_count,
+        tag.empty() ? nullptr : tag.c_str(),
+        mime_type.empty() ? nullptr : mime_type.c_str(),
+        etag.empty() ? nullptr : etag.c_str(),
+        last_modified.empty() ? nullptr : last_modified.c_str(),
+        checksum.empty() ? nullptr : checksum.c_str(),
+        WireChecksumFromString(checksum_algorithm), pinned ? TRUE : FALSE);
   }
 };
 
 std::string ComputeGLibHash(const uint8_t* data,
                             size_t length,
                             const std::string& algorithm) {
-  GChecksumType type = (algorithm == "md5" || algorithm == "MD5")
-                           ? G_CHECKSUM_MD5
-                           : G_CHECKSUM_SHA256;
-  gchar* hex = g_compute_checksum_for_data(type, data, length);
+  GChecksumType type = (AsciiLower(algorithm) == "md5") ? G_CHECKSUM_MD5
+                                                        : G_CHECKSUM_SHA256;
+  const uint8_t empty_byte = 0;
+  const uint8_t* ptr = (length > 0 && data != nullptr) ? data : &empty_byte;
+  gchar* hex = g_compute_checksum_for_data(type, ptr, length);
   if (!hex) return "";
   std::string out(hex);
   g_free(hex);
   return out;
 }
 
-std::string GetFlString(FlValue* map,
-                        const char* key,
-                        const std::string& fallback = "") {
-  if (!map || fl_value_get_type(map) != FL_VALUE_TYPE_MAP) return fallback;
-  FlValue* v = fl_value_lookup_string(map, key);
-  if (v && fl_value_get_type(v) == FL_VALUE_TYPE_STRING) {
-    return fl_value_get_string(v);
-  }
-  return fallback;
-}
-
-int64_t GetFlInt(FlValue* map, const char* key, int64_t fallback = 0) {
-  if (!map || fl_value_get_type(map) != FL_VALUE_TYPE_MAP) return fallback;
-  FlValue* v = fl_value_lookup_string(map, key);
-  if (v && fl_value_get_type(v) == FL_VALUE_TYPE_INT) {
-    return fl_value_get_int(v);
-  }
-  return fallback;
-}
-
-bool GetFlBool(FlValue* map, const char* key, bool fallback = false) {
-  if (!map || fl_value_get_type(map) != FL_VALUE_TYPE_MAP) return fallback;
-  FlValue* v = fl_value_lookup_string(map, key);
-  if (v && fl_value_get_type(v) == FL_VALUE_TYPE_BOOL) {
-    return fl_value_get_bool(v);
-  }
-  return fallback;
-}
-
-bool HasFlKey(FlValue* map, const char* key) {
-  if (!map || fl_value_get_type(map) != FL_VALUE_TYPE_MAP) return false;
-  FlValue* v = fl_value_lookup_string(map, key);
-  return v != nullptr && fl_value_get_type(v) != FL_VALUE_TYPE_NULL;
-}
-
 std::string InferExtension(const std::string& url,
                            const std::string& mime_type,
                            const std::string& explicit_ext) {
-  if (!explicit_ext.empty()) {
-    std::string clean = explicit_ext;
-    if (!clean.empty() && clean[0] == '.') clean = clean.substr(1);
-    return clean;
+  std::string clean_ext = TrimAscii(explicit_ext);
+  while (!clean_ext.empty() && clean_ext.front() == '.') {
+    clean_ext.erase(clean_ext.begin());
   }
-  auto q_pos = url.find('?');
+  if (!clean_ext.empty()) {
+    return AsciiLower(clean_ext);
+  }
+  auto q_pos = url.find_first_of("?#");
   std::string path = (q_pos == std::string::npos) ? url : url.substr(0, q_pos);
   auto slash_pos = path.find_last_of('/');
   std::string filename =
@@ -165,25 +209,126 @@ std::string InferExtension(const std::string& url,
   auto dot_pos = filename.find_last_of('.');
   if (dot_pos != std::string::npos && dot_pos + 1 < filename.size()) {
     std::string ext = filename.substr(dot_pos + 1);
-    if (ext.size() <= 8) return ext;
+    bool alnum = !ext.empty() && ext.size() <= 8;
+    for (char c : ext) {
+      if (!std::isalnum(static_cast<unsigned char>(c))) {
+        alnum = false;
+        break;
+      }
+    }
+    if (alnum) return AsciiLower(ext);
   }
-  if (mime_type.find("image/png") != std::string::npos) return "png";
-  if (mime_type.find("image/jpeg") != std::string::npos) return "jpg";
-  if (mime_type.find("image/webp") != std::string::npos) return "webp";
-  if (mime_type.find("image/gif") != std::string::npos) return "gif";
-  if (mime_type.find("application/pdf") != std::string::npos) return "pdf";
-  if (mime_type.find("application/json") != std::string::npos) return "json";
-  if (mime_type.find("audio/mpeg") != std::string::npos) return "mp3";
-  if (mime_type.find("video/mp4") != std::string::npos) return "mp4";
+  std::string clean_mime = mime_type;
+  auto semi = clean_mime.find(';');
+  if (semi != std::string::npos) {
+    clean_mime = clean_mime.substr(0, semi);
+  }
+  clean_mime = AsciiLower(TrimAscii(clean_mime));
+  if (clean_mime == "image/png") return "png";
+  if (clean_mime == "image/jpeg" || clean_mime == "image/jpg") return "jpg";
+  if (clean_mime == "image/webp") return "webp";
+  if (clean_mime == "image/gif") return "gif";
+  if (clean_mime == "image/svg+xml") return "svg";
+  if (clean_mime == "application/pdf") return "pdf";
+  if (clean_mime == "application/json") return "json";
+  if (clean_mime == "audio/mpeg" || clean_mime == "audio/mp3") return "mp3";
+  if (clean_mime == "video/mp4") return "mp4";
+  if (clean_mime == "text/plain") return "txt";
   return "bin";
+}
+
+std::optional<int64_t> ParseMaxAgeSeconds(const std::string& cache_control) {
+  if (cache_control.empty()) return std::nullopt;
+  const std::string lower = AsciiLower(cache_control);
+  const size_t pos = lower.find("max-age=");
+  if (pos == std::string::npos) return std::nullopt;
+  size_t idx = pos + 8;
+  if (idx >= lower.size() ||
+      !std::isdigit(static_cast<unsigned char>(lower[idx]))) {
+    return std::nullopt;
+  }
+  int64_t val = 0;
+  while (idx < lower.size() &&
+         std::isdigit(static_cast<unsigned char>(lower[idx]))) {
+    val = val * 10 + (lower[idx] - '0');
+    idx++;
+  }
+  return val;
+}
+
+std::map<std::string, std::string> ExtractFlStringMap(FlValue* map) {
+  std::map<std::string, std::string> out;
+  if (!map || fl_value_get_type(map) != FL_VALUE_TYPE_MAP) return out;
+  const size_t len = fl_value_get_length(map);
+  for (size_t i = 0; i < len; ++i) {
+    FlValue* k = fl_value_get_map_key(map, i);
+    FlValue* v = fl_value_get_map_value(map, i);
+    if (k && v && fl_value_get_type(k) == FL_VALUE_TYPE_STRING &&
+        fl_value_get_type(v) == FL_VALUE_TYPE_STRING) {
+      out[fl_value_get_string(k)] = fl_value_get_string(v);
+    }
+  }
+  return out;
+}
+
+struct DownloadRequest {
+  std::string url;
+  std::string custom_key;
+  std::string tag;
+  std::string file_ext;
+  std::map<std::string, std::string> headers;
+  bool has_ttl = false;
+  int64_t ttl_sec = 0;
+  bool force_refresh = false;
+  bool fallback_on_error = true;
+  bool pinned = false;
+  XueHuaCacheWireCacheChecksumAlgorithm checksum_alg =
+      XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_CHECKSUM_ALGORITHM_NONE;
+  std::string expected_checksum;
+};
+
+DownloadRequest ParseDownloadRequest(XueHuaCacheWireCacheRequest* wire) {
+  DownloadRequest request;
+  if (!wire) return request;
+  const gchar* raw_url = xue_hua_cache_wire_cache_request_get_url(wire);
+  request.url = TrimAscii(raw_url ? raw_url : "");
+  const gchar* raw_custom = xue_hua_cache_wire_cache_request_get_custom_key(wire);
+  if (raw_custom) request.custom_key = raw_custom;
+  const gchar* raw_tag = xue_hua_cache_wire_cache_request_get_tag(wire);
+  if (raw_tag) request.tag = raw_tag;
+  const gchar* raw_ext =
+      xue_hua_cache_wire_cache_request_get_file_extension(wire);
+  if (raw_ext) request.file_ext = raw_ext;
+  request.headers =
+      ExtractFlStringMap(xue_hua_cache_wire_cache_request_get_headers(wire));
+  int64_t* ttl_ptr = xue_hua_cache_wire_cache_request_get_ttl_seconds(wire);
+  if (ttl_ptr != nullptr) {
+    request.has_ttl = true;
+    request.ttl_sec = *ttl_ptr;
+  }
+  request.force_refresh =
+      xue_hua_cache_wire_cache_request_get_force_refresh(wire) != FALSE;
+  request.fallback_on_error =
+      xue_hua_cache_wire_cache_request_get_fallback_to_cache_on_error(wire) !=
+      FALSE;
+  request.pinned = xue_hua_cache_wire_cache_request_get_pinned(wire) != FALSE;
+  request.checksum_alg =
+      xue_hua_cache_wire_cache_request_get_checksum_algorithm(wire);
+  const gchar* raw_checksum =
+      xue_hua_cache_wire_cache_request_get_expected_checksum(wire);
+  if (raw_checksum) {
+    request.expected_checksum = AsciiLower(TrimAscii(raw_checksum));
+  }
+  return request;
 }
 
 }  // namespace
 
 struct _XueHuaNaviteCacheManagerPlugin {
   GObject parent_instance;
-  FlEventChannel* event_channel;
-  bool is_listening;
+  FlBinaryMessenger* messenger;
+  XueHuaCacheCacheProgressFlutterApi* flutter_api;
+  std::atomic<bool> disposed;
 };
 
 G_DEFINE_TYPE(XueHuaNaviteCacheManagerPlugin,
@@ -192,7 +337,7 @@ G_DEFINE_TYPE(XueHuaNaviteCacheManagerPlugin,
 
 namespace {
 
-std::mutex g_mutex;
+std::mutex g_config_mutex;
 int64_t g_max_disk_cache_bytes = 500LL * 1024LL * 1024LL;
 int g_max_entries = 20000;
 int64_t g_default_ttl_seconds = 7LL * 24LL * 3600LL;
@@ -200,100 +345,263 @@ std::string g_eviction_policy = "lru";
 std::string g_cache_subdirectory = "xue_hua_network_cache";
 int g_connect_timeout_ms = 15000;
 int g_read_timeout_ms = 30000;
-int g_max_concurrent_downloads = 4;
+std::map<std::string, std::string> g_default_headers;
 bool g_respect_http_cache_headers = true;
 bool g_auto_trim_on_write = true;
 
+std::mutex g_index_mutex;
 std::map<std::string, LinuxCacheRecord> g_entries;
+int64_t g_total_cached_bytes = 0;
 int64_t g_hit_count = 0;
 int64_t g_miss_count = 0;
 int64_t g_eviction_count = 0;
 bool g_index_loaded = false;
 
-std::string GetCacheRootDir() {
+std::string ResolveCacheRootPath(const std::string& subdirectory) {
   const gchar* base = g_get_user_cache_dir();
-  std::string dir = std::string(base ? base : "/tmp") + "/" + g_cache_subdirectory;
-  g_mkdir_with_parents(dir.c_str(), 0755);
+  return std::string(base ? base : "/tmp") + "/" + subdirectory;
+}
+
+std::string GetCacheRootDir(bool create_if_missing = true) {
+  std::string subdir;
+  {
+    std::lock_guard<std::mutex> lock(g_config_mutex);
+    subdir = g_cache_subdirectory;
+  }
+  std::string dir = ResolveCacheRootPath(subdir);
+  if (create_if_missing) {
+    g_mkdir_with_parents(dir.c_str(), 0755);
+  }
   return dir;
 }
 
-std::string GetIndexFilePath() {
-  return GetCacheRootDir() + "/cache_index_v1.tsv";
+std::string GetIndexFilePath(const std::string& subdirectory = "") {
+  std::string root = subdirectory.empty()
+                         ? GetCacheRootDir(false)
+                         : ResolveCacheRootPath(subdirectory);
+  return root + "/cache_index_v1.tsv";
 }
 
-void EnsureIndexLoadedLocked() {
-  if (g_index_loaded) return;
-  g_index_loaded = true;
-  g_entries.clear();
-
-  std::ifstream in(GetIndexFilePath());
-  if (!in.is_open()) return;
-
-  std::string line;
-  if (std::getline(in, line)) {
-    std::istringstream ss(line);
-    ss >> g_hit_count >> g_miss_count >> g_eviction_count;
+void EnsureIndexLoaded() {
+  {
+    std::lock_guard<std::mutex> lock(g_index_mutex);
+    if (g_index_loaded) return;
   }
-  while (std::getline(in, line)) {
-    if (line.empty()) continue;
-    std::vector<std::string> parts;
-    std::stringstream ss(line);
-    std::string item;
-    while (std::getline(ss, item, '\t')) {
-      parts.push_back(item);
+
+  const std::string index_path = GetIndexFilePath();
+  std::map<std::string, LinuxCacheRecord> loaded_entries;
+  int64_t loaded_bytes = 0;
+  int64_t loaded_hit = 0;
+  int64_t loaded_miss = 0;
+  int64_t loaded_eviction = 0;
+
+  std::ifstream in(index_path);
+  if (in.is_open()) {
+    std::string line;
+    if (std::getline(in, line)) {
+      std::istringstream ss(line);
+      ss >> loaded_hit >> loaded_miss >> loaded_eviction;
     }
-    if (parts.size() >= 15) {
-      LinuxCacheRecord rec;
-      rec.key = parts[0];
-      rec.url = parts[1];
-      rec.file_path = parts[2];
-      rec.size_bytes = std::stoll(parts[3]);
-      rec.created_at_ms = std::stoll(parts[4]);
-      rec.last_accessed_at_ms = std::stoll(parts[5]);
-      rec.expires_at_ms = std::stoll(parts[6]);
-      rec.hit_count = std::stoll(parts[7]);
-      rec.tag = parts[8];
-      rec.mime_type = parts[9];
-      rec.etag = parts[10];
-      rec.last_modified = parts[11];
-      rec.checksum = parts[12];
-      rec.checksum_algorithm = parts[13];
-      rec.pinned = (parts[14] == "1");
-      if (!rec.key.empty() &&
-          g_file_test(rec.file_path.c_str(), G_FILE_TEST_EXISTS)) {
-        g_entries[rec.key] = rec;
+    while (std::getline(in, line)) {
+      if (line.empty()) continue;
+      std::vector<std::string> parts;
+      std::stringstream ss(line);
+      std::string item;
+      while (std::getline(ss, item, '\t')) {
+        parts.push_back(item);
+      }
+      if (!line.empty() && line.back() == '\t') {
+        parts.emplace_back();
+      }
+      if (parts.size() >= 15) {
+        try {
+          LinuxCacheRecord rec;
+          rec.key = parts[0];
+          rec.url = parts[1];
+          rec.file_path = parts[2];
+          rec.size_bytes = std::stoll(parts[3]);
+          rec.created_at_ms = std::stoll(parts[4]);
+          rec.last_accessed_at_ms = std::stoll(parts[5]);
+          rec.expires_at_ms = std::stoll(parts[6]);
+          rec.hit_count = std::stoll(parts[7]);
+          rec.tag = parts[8];
+          rec.mime_type = parts[9];
+          rec.etag = parts[10];
+          rec.last_modified = parts[11];
+          rec.checksum = parts[12];
+          rec.checksum_algorithm = parts[13];
+          rec.pinned = (parts[14] == "1");
+          if (!rec.key.empty() &&
+              g_file_test(rec.file_path.c_str(), G_FILE_TEST_EXISTS)) {
+            loaded_entries[rec.key] = rec;
+            loaded_bytes += rec.size_bytes;
+          }
+        } catch (...) {
+        }
       }
     }
   }
+
+  std::lock_guard<std::mutex> lock(g_index_mutex);
+  if (g_index_loaded) return;
+  g_index_loaded = true;
+  g_entries = std::move(loaded_entries);
+  g_total_cached_bytes = loaded_bytes;
+  g_hit_count = loaded_hit;
+  g_miss_count = loaded_miss;
+  g_eviction_count = loaded_eviction;
+}
+
+std::atomic<bool> g_index_dirty{false};
+
+class PersistCoordinator {
+ public:
+  PersistCoordinator() {
+    thread_ = std::thread([this]() { Loop(); });
+  }
+  PersistCoordinator(const PersistCoordinator&) = delete;
+  PersistCoordinator& operator=(const PersistCoordinator&) = delete;
+
+  ~PersistCoordinator() {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      stopping_ = true;
+      scheduled_ = true;
+      deadline_ = std::chrono::steady_clock::now();
+    }
+    cv_.notify_all();
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  void Schedule() {
+    g_index_dirty.store(true, std::memory_order_release);
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      deadline_ =
+          std::chrono::steady_clock::now() + std::chrono::milliseconds(600);
+      scheduled_ = true;
+    }
+    cv_.notify_one();
+  }
+
+  void FlushNow(const std::string& override_subdir = "") {
+    if (!g_index_dirty.load(std::memory_order_acquire)) {
+      return;
+    }
+    std::string target_subdir = override_subdir;
+    if (target_subdir.empty()) {
+      std::lock_guard<std::mutex> lock(g_config_mutex);
+      target_subdir = g_cache_subdirectory;
+    }
+    const std::string root_dir = ResolveCacheRootPath(target_subdir);
+    const std::string index_path = root_dir + "/cache_index_v1.tsv";
+
+    int64_t snap_hit = 0;
+    int64_t snap_miss = 0;
+    int64_t snap_eviction = 0;
+    std::vector<LinuxCacheRecord> snap_entries;
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      if (!g_index_dirty.exchange(false, std::memory_order_acq_rel)) {
+        return;
+      }
+      snap_hit = g_hit_count;
+      snap_miss = g_miss_count;
+      snap_eviction = g_eviction_count;
+      snap_entries.reserve(g_entries.size());
+      for (const auto& kv : g_entries) {
+        snap_entries.push_back(kv.second);
+      }
+    }
+
+    g_mkdir_with_parents(root_dir.c_str(), 0755);
+    const std::string tmp_path = index_path + ".tmp";
+    bool wrote = false;
+    {
+      std::ofstream out(tmp_path, std::ios::trunc);
+      if (out.is_open()) {
+        out << snap_hit << " " << snap_miss << " " << snap_eviction << "\n";
+        for (const auto& r : snap_entries) {
+          out << SanitizeTsvField(r.key) << "\t"
+              << SanitizeTsvField(r.url) << "\t"
+              << SanitizeTsvField(r.file_path) << "\t" << r.size_bytes << "\t"
+              << r.created_at_ms << "\t" << r.last_accessed_at_ms << "\t"
+              << r.expires_at_ms << "\t" << r.hit_count << "\t"
+              << SanitizeTsvField(r.tag) << "\t"
+              << SanitizeTsvField(r.mime_type) << "\t"
+              << SanitizeTsvField(r.etag) << "\t"
+              << SanitizeTsvField(r.last_modified) << "\t"
+              << SanitizeTsvField(r.checksum) << "\t"
+              << SanitizeTsvField(r.checksum_algorithm) << "\t"
+              << (r.pinned ? "1" : "0") << "\n";
+        }
+        wrote = static_cast<bool>(out);
+      }
+    }
+    if (!wrote || std::rename(tmp_path.c_str(), index_path.c_str()) != 0) {
+      std::remove(tmp_path.c_str());
+      g_index_dirty.store(true, std::memory_order_release);
+    }
+  }
+
+ private:
+  void Loop() {
+    std::unique_lock<std::mutex> lock(mu_);
+    while (!stopping_) {
+      if (!scheduled_) {
+        cv_.wait(lock, [this]() { return stopping_ || scheduled_; });
+        continue;
+      }
+      const auto target = deadline_;
+      cv_.wait_until(lock, target, [this, target]() {
+        return stopping_ || deadline_ != target;
+      });
+      if (stopping_) break;
+      if (std::chrono::steady_clock::now() < deadline_) continue;
+      scheduled_ = false;
+      lock.unlock();
+      FlushNow();
+      lock.lock();
+    }
+    lock.unlock();
+    FlushNow();
+  }
+
+  std::mutex mu_;
+  std::condition_variable cv_;
+  std::thread thread_;
+  bool stopping_ = false;
+  bool scheduled_ = false;
+  std::chrono::steady_clock::time_point deadline_{};
+};
+
+PersistCoordinator& GetPersistCoordinator() {
+  static PersistCoordinator coordinator;
+  return coordinator;
 }
 
 void PersistIndexLocked() {
-  std::ofstream out(GetIndexFilePath(), std::ios::trunc);
-  if (!out.is_open()) return;
-  out << g_hit_count << " " << g_miss_count << " " << g_eviction_count << "\n";
-  for (const auto& kv : g_entries) {
-    const auto& r = kv.second;
-    out << r.key << "\t" << r.url << "\t" << r.file_path << "\t" << r.size_bytes
-        << "\t" << r.created_at_ms << "\t" << r.last_accessed_at_ms << "\t"
-        << r.expires_at_ms << "\t" << r.hit_count << "\t" << r.tag << "\t"
-        << r.mime_type << "\t" << r.etag << "\t" << r.last_modified << "\t"
-        << r.checksum << "\t" << r.checksum_algorithm << "\t"
-        << (r.pinned ? "1" : "0") << "\n";
-  }
+  GetPersistCoordinator().Schedule();
 }
 
-std::string ResolveKeyLocked(const std::string& key_or_url,
-                             const std::string& custom_key = "") {
-  if (!custom_key.empty()) return custom_key;
-  if (g_entries.find(key_or_url) != g_entries.end()) {
-    return key_or_url;
+std::string ResolveKey(const std::string& key_or_url,
+                       const std::string& custom_key = "") {
+  const std::string trimmed = TrimAscii(custom_key);
+  if (!trimmed.empty()) return trimmed;
+  {
+    std::lock_guard<std::mutex> lock(g_index_mutex);
+    if (g_entries.find(key_or_url) != g_entries.end()) {
+      return key_or_url;
+    }
   }
   return ComputeGLibHash(reinterpret_cast<const uint8_t*>(key_or_url.data()),
                          key_or_url.size(), "sha256");
 }
 
 int RemoveExpiredLocked() {
-  int64_t now = CurrentTimeMs();
+  const int64_t now = CurrentTimeMs();
   std::vector<std::string> expired;
   for (const auto& kv : g_entries) {
     if (!kv.second.pinned && kv.second.IsExpired(now)) {
@@ -301,84 +609,66 @@ int RemoveExpiredLocked() {
     }
   }
   for (const auto& k : expired) {
-    std::remove(g_entries[k].file_path.c_str());
-    g_entries.erase(k);
+    auto it = g_entries.find(k);
+    if (it != g_entries.end()) {
+      std::remove(it->second.file_path.c_str());
+      g_total_cached_bytes =
+          std::max<int64_t>(0, g_total_cached_bytes - it->second.size_bytes);
+      g_entries.erase(it);
+    }
   }
   g_eviction_count += static_cast<int64_t>(expired.size());
   return static_cast<int>(expired.size());
 }
 
 int EnforceQuotaLocked(int64_t target_max_bytes,
+                       int max_entries,
+                       const std::string& eviction_policy,
                        const std::string& protected_key) {
   int evicted = RemoveExpiredLocked();
-  if (g_eviction_policy == "ttlOnly") return evicted;
+  if (eviction_policy == "ttlOnly") return evicted;
 
-  int64_t total_bytes = 0;
-  for (const auto& kv : g_entries) {
-    total_bytes += kv.second.size_bytes;
-  }
-  if (total_bytes <= target_max_bytes &&
-      static_cast<int>(g_entries.size()) <= g_max_entries) {
+  if (g_total_cached_bytes <= target_max_bytes &&
+      static_cast<int>(g_entries.size()) <= max_entries) {
     return evicted;
   }
 
   std::vector<LinuxCacheRecord> candidates;
+  candidates.reserve(g_entries.size());
   for (const auto& kv : g_entries) {
     if (!kv.second.pinned && kv.first != protected_key) {
       candidates.push_back(kv.second);
     }
   }
   std::sort(candidates.begin(), candidates.end(),
-            [](const LinuxCacheRecord& a, const LinuxCacheRecord& b) {
-              if (g_eviction_policy == "lfu") {
+            [&eviction_policy](const LinuxCacheRecord& a,
+                               const LinuxCacheRecord& b) {
+              if (eviction_policy == "lfu") {
                 if (a.hit_count != b.hit_count) return a.hit_count < b.hit_count;
                 return a.last_accessed_at_ms < b.last_accessed_at_ms;
               }
-              if (g_eviction_policy == "fifo") {
+              if (eviction_policy == "fifo") {
                 return a.created_at_ms < b.created_at_ms;
               }
               return a.last_accessed_at_ms < b.last_accessed_at_ms;
             });
 
   for (const auto& cand : candidates) {
-    if (total_bytes <= target_max_bytes &&
-        static_cast<int>(g_entries.size()) <= g_max_entries) {
+    if (g_total_cached_bytes <= target_max_bytes &&
+        static_cast<int>(g_entries.size()) <= max_entries) {
       break;
     }
-    std::remove(cand.file_path.c_str());
-    total_bytes -= cand.size_bytes;
-    g_entries.erase(cand.key);
-    evicted++;
-    g_eviction_count++;
+    auto it = g_entries.find(cand.key);
+    if (it != g_entries.end()) {
+      std::remove(it->second.file_path.c_str());
+      g_total_cached_bytes =
+          std::max<int64_t>(0, g_total_cached_bytes - it->second.size_bytes);
+      g_entries.erase(it);
+      evicted++;
+      g_eviction_count++;
+    }
   }
   return evicted;
-}
-
-void EmitProgress(XueHuaNaviteCacheManagerPlugin* self,
-                  const std::string& key,
-                  const std::string& url,
-                  const std::string& state,
-                  int64_t bytes_received,
-                  int64_t total_bytes,
-                  const std::string& file_path = "",
-                  const std::string& error_msg = "") {
-  if (!self || !self->is_listening || !self->event_channel) return;
-  g_autoptr(FlValue) map = fl_value_new_map();
-  fl_value_set_string_take(map, "key", fl_value_new_string(key.c_str()));
-  fl_value_set_string_take(map, "url", fl_value_new_string(url.c_str()));
-  fl_value_set_string_take(map, "state", fl_value_new_string(state.c_str()));
-  fl_value_set_string_take(map, "bytesReceived",
-                           fl_value_new_int(bytes_received));
-  fl_value_set_string_take(map, "totalBytes", fl_value_new_int(total_bytes));
-  fl_value_set_string_take(map, "filePath",
-                           file_path.empty()
-                               ? fl_value_new_null()
-                               : fl_value_new_string(file_path.c_str()));
-  fl_value_set_string_take(map, "errorMessage",
-                           error_msg.empty()
-                               ? fl_value_new_null()
-                               : fl_value_new_string(error_msg.c_str()));
-  fl_event_channel_send(self->event_channel, map, nullptr, nullptr);
 }
 
 struct CurlHttpResult {
@@ -387,30 +677,9 @@ struct CurlHttpResult {
   std::string etag;
   std::string last_modified;
   std::string content_type;
+  std::string cache_control;
   std::string error;
 };
-
-std::string AsciiLower(const std::string& in) {
-  std::string out = in;
-  for (char& c : out) {
-    c = static_cast<char>(g_ascii_tolower(static_cast<gchar>(c)));
-  }
-  return out;
-}
-
-std::string TrimAscii(const std::string& in) {
-  size_t begin = 0;
-  while (begin < in.size() &&
-         (in[begin] == ' ' || in[begin] == '\t' || in[begin] == '\r')) {
-    begin++;
-  }
-  size_t end = in.size();
-  while (end > begin &&
-         (in[end - 1] == ' ' || in[end - 1] == '\t' || in[end - 1] == '\r')) {
-    end--;
-  }
-  return in.substr(begin, end - begin);
-}
 
 void ParseLastHeaderBlock(const std::string& raw, CurlHttpResult* result) {
   std::map<std::string, std::string> headers;
@@ -431,6 +700,8 @@ void ParseLastHeaderBlock(const std::string& raw, CurlHttpResult* result) {
   if (etag != headers.end()) result->etag = etag->second;
   const auto modified = headers.find("last-modified");
   if (modified != headers.end()) result->last_modified = modified->second;
+  const auto cache_ctrl = headers.find("cache-control");
+  if (cache_ctrl != headers.end()) result->cache_control = cache_ctrl->second;
   const auto type = headers.find("content-type");
   if (type != headers.end()) {
     const auto semi = type->second.find(';');
@@ -452,10 +723,11 @@ int ParseHttpStatus(const std::string& stdout_text) {
   return status;
 }
 
-CurlHttpResult DownloadViaCurlOrGio(const std::string& url,
-                                    const std::string& dest_tmp_path,
-                                    int timeout_sec,
-                                    const std::string& extra_headers) {
+CurlHttpResult DownloadViaCurl(const std::string& url,
+                               const std::string& dest_tmp_path,
+                               int connect_timeout_sec,
+                               int max_time_sec,
+                               const std::string& extra_headers) {
   CurlHttpResult result;
   const std::string header_path = dest_tmp_path + ".hdr";
   gchar* quoted_url = g_shell_quote(url.c_str());
@@ -463,8 +735,9 @@ CurlHttpResult DownloadViaCurlOrGio(const std::string& url,
   gchar* quoted_hdr = g_shell_quote(header_path.c_str());
   gchar* quoted_write_out = g_shell_quote("%{http_code}");
   g_autofree gchar* cmd = g_strdup_printf(
-      "curl -sS -L --max-time %d -D %s -o %s -w %s%s %s",
-      timeout_sec > 0 ? timeout_sec : 30, quoted_hdr, quoted_dest,
+      "curl -sS -L --connect-timeout %d --max-time %d -D %s -o %s -w %s%s %s",
+      connect_timeout_sec > 0 ? connect_timeout_sec : 15,
+      max_time_sec > 0 ? max_time_sec : 30, quoted_hdr, quoted_dest,
       quoted_write_out, extra_headers.c_str(), quoted_url);
   g_free(quoted_url);
   g_free(quoted_dest);
@@ -514,28 +787,15 @@ CurlHttpResult DownloadViaCurlOrGio(const std::string& url,
   return result;
 }
 
-struct DownloadRequest {
-  std::string url;
-  std::string custom_key;
-  std::string tag;
-  std::string file_ext;
-  bool has_ttl = false;
-  int64_t ttl_sec = 0;
-  bool force_refresh = false;
-  bool fallback_on_error = true;
-  bool pinned = false;
-  std::string checksum_alg = "none";
-  std::string expected_checksum;
-};
-
 struct DownloadOutcome {
   bool ok = false;
   std::string error_code;
   std::string error_message;
   LinuxCacheRecord entry;
-  std::string source;
+  XueHuaCacheWireCacheResultSource source =
+      XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_RESULT_SOURCE_NETWORK_DOWNLOAD;
   bool has_http_status = false;
-  int http_status = 0;
+  int64_t http_status = 0;
   int64_t elapsed_ms = 0;
 };
 
@@ -545,15 +805,16 @@ struct InFlightDownload {
   std::vector<std::function<void(const DownloadOutcome&)>> waiters;
 };
 
+std::mutex g_flight_mutex;
 std::map<std::string, std::shared_ptr<InFlightDownload>> g_in_flight;
 
-class DownloadPool {
+class WorkerPool {
  public:
-  DownloadPool() = default;
-  DownloadPool(const DownloadPool&) = delete;
-  DownloadPool& operator=(const DownloadPool&) = delete;
+  explicit WorkerPool(int limit) : limit_(std::max(1, limit)) {}
+  WorkerPool(const WorkerPool&) = delete;
+  WorkerPool& operator=(const WorkerPool&) = delete;
 
-  ~DownloadPool() {
+  ~WorkerPool() {
     {
       std::lock_guard<std::mutex> lock(mu_);
       stopping_ = true;
@@ -596,10 +857,9 @@ class DownloadPool {
       {
         std::unique_lock<std::mutex> lock(mu_);
         cv_.wait(lock, [this]() {
-          return (stopping_ && jobs_.empty()) ||
-                 (!jobs_.empty() && active_ < limit_);
+          return stopping_ || (!jobs_.empty() && active_ < limit_);
         });
-        if (jobs_.empty()) return;
+        if (stopping_ || jobs_.empty()) return;
         job = std::move(jobs_.front());
         jobs_.pop();
         active_ += 1;
@@ -625,8 +885,13 @@ class DownloadPool {
   bool stopping_ = false;
 };
 
-DownloadPool& GetDownloadPool() {
-  static DownloadPool pool;
+WorkerPool& GetDownloadPool() {
+  static WorkerPool pool(4);
+  return pool;
+}
+
+WorkerPool& GetIoPool() {
+  static WorkerPool pool(4);
   return pool;
 }
 
@@ -634,7 +899,8 @@ struct ProgressPayload {
   XueHuaNaviteCacheManagerPlugin* self = nullptr;
   std::string key;
   std::string url;
-  std::string state;
+  XueHuaCacheWireCacheTransferState state =
+      XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_STARTED;
   std::string file_path;
   std::string error;
   int64_t bytes = 0;
@@ -643,22 +909,31 @@ struct ProgressPayload {
 
 static gboolean ProgressOnMain(gpointer data) {
   std::unique_ptr<ProgressPayload> payload(static_cast<ProgressPayload*>(data));
-  EmitProgress(payload->self, payload->key, payload->url, payload->state,
-               payload->bytes, payload->total, payload->file_path,
-               payload->error);
-  g_object_unref(payload->self);
+  XueHuaNaviteCacheManagerPlugin* self = payload->self;
+  if (self && !self->disposed.load(std::memory_order_acquire) &&
+      self->flutter_api) {
+    g_autoptr(XueHuaCacheWireCacheProgressEvent) event =
+        xue_hua_cache_wire_cache_progress_event_new(
+            payload->key.c_str(), payload->url.c_str(), payload->state,
+            payload->bytes, payload->total,
+            payload->file_path.empty() ? nullptr : payload->file_path.c_str(),
+            payload->error.empty() ? nullptr : payload->error.c_str());
+    xue_hua_cache_cache_progress_flutter_api_on_progress(
+        self->flutter_api, event, nullptr, nullptr, nullptr);
+  }
+  g_object_unref(self);
   return G_SOURCE_REMOVE;
 }
 
 void PostProgress(XueHuaNaviteCacheManagerPlugin* self,
                   const std::string& key,
                   const std::string& url,
-                  const std::string& state,
+                  XueHuaCacheWireCacheTransferState state,
                   int64_t bytes,
                   int64_t total,
                   const std::string& file_path = "",
                   const std::string& error = "") {
-  if (!self) return;
+  if (!self || self->disposed.load(std::memory_order_acquire)) return;
   auto* payload = new ProgressPayload();
   payload->self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(g_object_ref(self));
   payload->key = key;
@@ -680,9 +955,9 @@ DownloadOutcome MakeFailure(const std::string& code, const std::string& message)
 }
 
 DownloadOutcome MakeSuccess(const LinuxCacheRecord& entry,
-                            const std::string& source,
+                            XueHuaCacheWireCacheResultSource source,
                             bool has_http_status,
-                            int http_status,
+                            int64_t http_status,
                             int64_t elapsed_ms) {
   DownloadOutcome out;
   out.ok = true;
@@ -694,71 +969,47 @@ DownloadOutcome MakeSuccess(const LinuxCacheRecord& entry,
   return out;
 }
 
-DownloadRequest ParseDownloadRequest(FlValue* args) {
-  DownloadRequest request;
-  request.url = GetFlString(args, "url");
-  request.custom_key = GetFlString(args, "customKey");
-  request.tag = GetFlString(args, "tag");
-  request.file_ext = GetFlString(args, "fileExtension");
-  request.has_ttl = HasFlKey(args, "ttlSeconds");
-  request.ttl_sec = GetFlInt(args, "ttlSeconds", g_default_ttl_seconds);
-  request.force_refresh = GetFlBool(args, "forceRefresh", false);
-  request.fallback_on_error = GetFlBool(args, "fallbackToCacheOnError", true);
-  request.pinned = GetFlBool(args, "pinned", false);
-  request.checksum_alg = GetFlString(args, "checksumAlgorithm", "none");
-  request.expected_checksum = GetFlString(args, "expectedChecksum");
-  return request;
+XueHuaCacheWireCacheFetchResult* OutcomeToWireResult(
+    const DownloadOutcome& outcome) {
+  g_autoptr(XueHuaCacheWireCacheEntry) wire_entry = outcome.entry.ToWireEntry();
+  int64_t status_val = outcome.http_status;
+  return xue_hua_cache_wire_cache_fetch_result_new(
+      wire_entry, outcome.source,
+      outcome.has_http_status ? &status_val : nullptr, outcome.elapsed_ms);
 }
 
-FlMethodResponse* OutcomeToResponse(const DownloadOutcome& outcome) {
-  if (!outcome.ok) {
-    return FL_METHOD_RESPONSE(fl_method_error_response_new(
-        outcome.error_code.c_str(), outcome.error_message.c_str(), nullptr));
-  }
-  g_autoptr(FlValue) res = fl_value_new_map();
-  fl_value_set_string_take(res, "entry", outcome.entry.ToFlValue());
-  fl_value_set_string_take(res, "source",
-                           fl_value_new_string(outcome.source.c_str()));
-  if (outcome.has_http_status) {
-    fl_value_set_string_take(res, "httpStatusCode",
-                             fl_value_new_int(outcome.http_status));
-  } else {
-    fl_value_set_string_take(res, "httpStatusCode", fl_value_new_null());
-  }
-  fl_value_set_string_take(res, "elapsedMs", fl_value_new_int(outcome.elapsed_ms));
-  return FL_METHOD_RESPONSE(fl_method_success_response_new(res));
-}
-
-struct AsyncDownloadReply {
-  FlMethodCall* method_call = nullptr;
-  DownloadOutcome outcome;
+struct MainCallbackTask {
+  XueHuaNaviteCacheManagerPlugin* self = nullptr;
+  XueHuaCacheCacheHostApiResponseHandle* handle = nullptr;
+  std::function<void()> callback;
 };
 
-static gboolean DeliverDownloadReply(gpointer data) {
-  std::unique_ptr<AsyncDownloadReply> reply(static_cast<AsyncDownloadReply*>(data));
-  g_autoptr(FlMethodResponse) response = OutcomeToResponse(reply->outcome);
-  fl_method_call_respond(reply->method_call, response, nullptr);
-  g_object_unref(reply->method_call);
+static gboolean RunMainCallback(gpointer data) {
+  std::unique_ptr<MainCallbackTask> task(static_cast<MainCallbackTask*>(data));
+  if (task->self && !task->self->disposed.load(std::memory_order_acquire) &&
+      task->callback) {
+    task->callback();
+  }
+  if (task->handle) {
+    g_object_unref(task->handle);
+  }
+  if (task->self) {
+    g_object_unref(task->self);
+  }
   return G_SOURCE_REMOVE;
 }
 
-struct AsyncPrefetchReply {
-  FlMethodCall* method_call = nullptr;
-  std::vector<DownloadOutcome> outcomes;
-};
-
-static gboolean DeliverPrefetchReply(gpointer data) {
-  std::unique_ptr<AsyncPrefetchReply> reply(static_cast<AsyncPrefetchReply*>(data));
-  g_autoptr(FlValue) list = fl_value_new_list();
-  for (const auto& outcome : reply->outcomes) {
-    if (!outcome.ok) continue;
-    fl_value_append_take(list, outcome.entry.ToFlValue());
-  }
-  g_autoptr(FlMethodResponse) response =
-      FL_METHOD_RESPONSE(fl_method_success_response_new(list));
-  fl_method_call_respond(reply->method_call, response, nullptr);
-  g_object_unref(reply->method_call);
-  return G_SOURCE_REMOVE;
+void PostMainResponse(XueHuaNaviteCacheManagerPlugin* self,
+                      XueHuaCacheCacheHostApiResponseHandle* handle,
+                      std::function<void()> fn) {
+  if (!self || self->disposed.load(std::memory_order_acquire)) return;
+  auto* task = new MainCallbackTask();
+  task->self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(g_object_ref(self));
+  task->handle =
+      handle ? XUE_HUA_CACHE_CACHE_HOST_API_RESPONSE_HANDLE(g_object_ref(handle))
+             : nullptr;
+  task->callback = std::move(fn);
+  g_idle_add(RunMainCallback, task);
 }
 
 DownloadOutcome ExecuteDownload(
@@ -770,9 +1021,31 @@ DownloadOutcome ExecuteDownload(
   LinuxCacheRecord existing;
   bool has_existing = false;
 
+  int64_t cfg_max_bytes = 500LL * 1024LL * 1024LL;
+  int cfg_max_entries = 20000;
+  int64_t cfg_default_ttl = 7LL * 24LL * 3600LL;
+  std::string cfg_policy = "lru";
+  int cfg_connect_timeout_ms = 15000;
+  int cfg_read_timeout_ms = 30000;
+  std::map<std::string, std::string> cfg_default_headers;
+  bool cfg_respect_http = true;
+  bool cfg_auto_trim = true;
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
+    std::lock_guard<std::mutex> lock(g_config_mutex);
+    cfg_max_bytes = g_max_disk_cache_bytes;
+    cfg_max_entries = g_max_entries;
+    cfg_default_ttl = g_default_ttl_seconds;
+    cfg_policy = g_eviction_policy;
+    cfg_connect_timeout_ms = g_connect_timeout_ms;
+    cfg_read_timeout_ms = g_read_timeout_ms;
+    cfg_default_headers = g_default_headers;
+    cfg_respect_http = g_respect_http_cache_headers;
+    cfg_auto_trim = g_auto_trim_on_write;
+  }
+
+  std::optional<DownloadOutcome> fresh_hit;
+  {
+    std::lock_guard<std::mutex> lock(g_index_mutex);
     auto it = g_entries.find(key);
     if (it != g_entries.end() &&
         g_file_test(it->second.file_path.c_str(), G_FILE_TEST_EXISTS)) {
@@ -785,83 +1058,129 @@ DownloadOutcome ExecuteDownload(
         if (request.pinned) it->second.pinned = true;
         g_hit_count++;
         PersistIndexLocked();
-        existing = it->second;
-        // Emit after releasing the lock, via the main loop.
-        has_existing = true;
-        PostProgress(self, key, request.url, "cacheHit", existing.size_bytes,
-                     existing.size_bytes, existing.file_path);
-        return MakeSuccess(existing, "cacheHit", false, 0,
-                           CurrentTimeMs() - start_ms);
+        fresh_hit = MakeSuccess(
+            it->second,
+            XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_RESULT_SOURCE_CACHE_HIT,
+            false, 0, CurrentTimeMs() - start_ms);
       }
     }
-    g_miss_count++;
+    if (!fresh_hit.has_value()) {
+      g_miss_count++;
+    }
+  }
+  if (fresh_hit.has_value()) {
+    PostProgress(
+        self, key, request.url,
+        XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_CACHE_HIT,
+        fresh_hit->entry.size_bytes, fresh_hit->entry.size_bytes,
+        fresh_hit->entry.file_path);
+    return *fresh_hit;
   }
 
   if (cancel_flag && cancel_flag->load()) {
-    PostProgress(self, key, request.url, "canceled", 0, -1, "",
-                 "Download canceled");
+    PostProgress(
+        self, key, request.url,
+        XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_CANCELED, 0, -1,
+        "", "Download canceled");
     return MakeFailure("CANCELED", "Download canceled");
   }
 
-  PostProgress(self, key, request.url, "started", 0, -1);
-  std::string tmp_path = GetCacheRootDir() + "/" + key + ".tmp";
-  int timeout_sec = (g_connect_timeout_ms + g_read_timeout_ms) / 1000;
+  PostProgress(
+      self, key, request.url,
+      XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_STARTED, 0, -1);
 
-  std::string extra_headers;
-  if (g_respect_http_cache_headers && has_existing) {
+  const std::string root_dir = GetCacheRootDir(true);
+  const std::string tmp_path = root_dir + "/" + key + ".tmp";
+  const int connect_sec = std::max(1, (cfg_connect_timeout_ms + 999) / 1000);
+  const int total_sec =
+      std::max(1, (cfg_connect_timeout_ms + cfg_read_timeout_ms + 999) / 1000);
+
+  std::map<std::string, std::pair<std::string, std::string>> merged_headers;
+  for (const auto& kv : cfg_default_headers) {
+    const std::string clean_name = SanitizeHeaderName(kv.first);
+    if (!clean_name.empty()) {
+      merged_headers[AsciiLower(clean_name)] =
+          std::make_pair(clean_name, SanitizeHeaderValue(kv.second));
+    }
+  }
+  for (const auto& kv : request.headers) {
+    const std::string clean_name = SanitizeHeaderName(kv.first);
+    if (!clean_name.empty()) {
+      merged_headers[AsciiLower(clean_name)] =
+          std::make_pair(clean_name, SanitizeHeaderValue(kv.second));
+    }
+  }
+  if (cfg_respect_http && has_existing) {
     if (!existing.etag.empty()) {
-      std::string hdr = "If-None-Match: " + existing.etag;
-      gchar* quoted = g_shell_quote(hdr.c_str());
-      extra_headers += " -H ";
-      extra_headers += quoted;
-      g_free(quoted);
+      merged_headers["if-none-match"] =
+          std::make_pair("If-None-Match", SanitizeHeaderValue(existing.etag));
     }
     if (!existing.last_modified.empty()) {
-      std::string hdr = "If-Modified-Since: " + existing.last_modified;
-      gchar* quoted = g_shell_quote(hdr.c_str());
-      extra_headers += " -H ";
-      extra_headers += quoted;
-      g_free(quoted);
+      merged_headers["if-modified-since"] = std::make_pair(
+          "If-Modified-Since", SanitizeHeaderValue(existing.last_modified));
     }
   }
 
-  const CurlHttpResult downloaded =
-      DownloadViaCurlOrGio(request.url, tmp_path, timeout_sec, extra_headers);
+  std::string extra_headers;
+  for (const auto& kv : merged_headers) {
+    const std::string hdr = kv.second.first + ": " + kv.second.second;
+    gchar* quoted = g_shell_quote(hdr.c_str());
+    extra_headers += " -H ";
+    extra_headers += quoted;
+    g_free(quoted);
+  }
+
+  const CurlHttpResult downloaded = DownloadViaCurl(
+      request.url, tmp_path, connect_sec, total_sec, extra_headers);
   if (!downloaded.ok) {
     std::remove(tmp_path.c_str());
     if (cancel_flag && cancel_flag->load()) {
-      PostProgress(self, key, request.url, "canceled", 0, -1, "",
-                   "Download canceled");
+      PostProgress(
+          self, key, request.url,
+          XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_CANCELED, 0,
+          -1, "", "Download canceled");
       return MakeFailure("CANCELED", "Download canceled");
     }
     if (request.fallback_on_error && has_existing) {
-      return MakeSuccess(existing, "staleCacheFallback", false, 0,
-                         CurrentTimeMs() - start_ms);
+      return MakeSuccess(
+          existing,
+          XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_RESULT_SOURCE_STALE_CACHE_FALLBACK,
+          downloaded.status != 0, downloaded.status,
+          CurrentTimeMs() - start_ms);
     }
-    PostProgress(self, key, request.url, "failed", 0, -1, "", downloaded.error);
+    PostProgress(
+        self, key, request.url,
+        XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_FAILED, 0, -1,
+        "", downloaded.error);
     return MakeFailure(downloaded.status >= 400 ? "HTTP_ERROR" : "DOWNLOAD_FAILED",
                        downloaded.error);
   }
 
   if (cancel_flag && cancel_flag->load()) {
     std::remove(tmp_path.c_str());
-    PostProgress(self, key, request.url, "canceled", 0, -1, "",
-                 "Download canceled");
+    PostProgress(
+        self, key, request.url,
+        XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_CANCELED, 0, -1,
+        "", "Download canceled");
     return MakeFailure("CANCELED", "Download canceled");
   }
 
   if (downloaded.status == 304 && has_existing) {
     std::remove(tmp_path.c_str());
     const int64_t now = CurrentTimeMs();
+    const auto header_ttl = cfg_respect_http
+                                ? ParseMaxAgeSeconds(downloaded.cache_control)
+                                : std::nullopt;
+    const int64_t ttl_sec =
+        request.has_ttl ? request.ttl_sec
+                        : (header_ttl ? *header_ttl : cfg_default_ttl);
     LinuxCacheRecord refreshed = existing;
     {
-      std::lock_guard<std::mutex> lock(g_mutex);
+      std::lock_guard<std::mutex> lock(g_index_mutex);
       auto it = g_entries.find(key);
       if (it != g_entries.end()) refreshed = it->second;
       refreshed.last_accessed_at_ms = now;
-      refreshed.expires_at_ms =
-          now +
-          (request.has_ttl ? request.ttl_sec : g_default_ttl_seconds) * 1000LL;
+      refreshed.expires_at_ms = now + ttl_sec * 1000LL;
       refreshed.hit_count += 1;
       if (!downloaded.etag.empty()) refreshed.etag = downloaded.etag;
       if (!downloaded.last_modified.empty()) {
@@ -873,39 +1192,73 @@ DownloadOutcome ExecuteDownload(
       g_entries[key] = refreshed;
       PersistIndexLocked();
     }
-    PostProgress(self, key, request.url, "cacheHit", refreshed.size_bytes,
-                 refreshed.size_bytes, refreshed.file_path);
-    return MakeSuccess(refreshed, "revalidated", true, 304,
-                       CurrentTimeMs() - start_ms);
+    PostProgress(
+        self, key, request.url,
+        XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_CACHE_HIT,
+        refreshed.size_bytes, refreshed.size_bytes, refreshed.file_path);
+    return MakeSuccess(
+        refreshed,
+        XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_RESULT_SOURCE_REVALIDATED, true,
+        304, CurrentTimeMs() - start_ms);
   }
 
   gchar* contents = nullptr;
   gsize length = 0;
   if (!g_file_get_contents(tmp_path.c_str(), &contents, &length, nullptr)) {
     std::remove(tmp_path.c_str());
+    PostProgress(
+        self, key, request.url,
+        XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_FAILED, 0, -1,
+        "", "Failed to read downloaded file");
     return MakeFailure("READ_ERROR", "Failed to read downloaded file");
   }
 
+  PostProgress(
+      self, key, request.url,
+      XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_IN_PROGRESS,
+      static_cast<int64_t>(length), static_cast<int64_t>(length));
+
+  const std::string checksum_alg_str =
+      ChecksumAlgToString(request.checksum_alg);
   std::string computed_hash;
-  if (request.checksum_alg != "none") {
-    computed_hash = ComputeGLibHash(reinterpret_cast<const uint8_t*>(contents),
-                                    length, request.checksum_alg);
+  if (request.checksum_alg !=
+      XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_CHECKSUM_ALGORITHM_NONE) {
+    computed_hash = ComputeGLibHash(
+        reinterpret_cast<const uint8_t*>(contents), length, checksum_alg_str);
     if (!request.expected_checksum.empty() &&
-        computed_hash != request.expected_checksum) {
+        AsciiLower(computed_hash) != request.expected_checksum) {
       g_free(contents);
       std::remove(tmp_path.c_str());
-      PostProgress(self, key, request.url, "failed", 0, -1, "",
-                   "Checksum mismatch");
+      PostProgress(
+          self, key, request.url,
+          XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_FAILED, 0, -1,
+          "", "Checksum mismatch");
       return MakeFailure("CHECKSUM_MISMATCH", "Checksum verification failed");
     }
   }
   g_free(contents);
 
-  std::string ext = InferExtension(request.url, "", request.file_ext);
-  std::string final_path = GetCacheRootDir() + "/" + key + "." + ext;
-  std::rename(tmp_path.c_str(), final_path.c_str());
+  const std::string ext =
+      InferExtension(request.url, downloaded.content_type, request.file_ext);
+  const std::string final_path = root_dir + "/" + key + "." + ext;
+  if (std::rename(tmp_path.c_str(), final_path.c_str()) != 0) {
+    std::remove(tmp_path.c_str());
+    PostProgress(
+        self, key, request.url,
+        XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_FAILED, 0, -1,
+        "", "Failed moving downloaded file into cache");
+    return MakeFailure("DISK_WRITE_ERROR",
+                       "Failed moving downloaded file into cache");
+  }
 
-  int64_t now = CurrentTimeMs();
+  const int64_t now = CurrentTimeMs();
+  const auto header_ttl = cfg_respect_http
+                              ? ParseMaxAgeSeconds(downloaded.cache_control)
+                              : std::nullopt;
+  const int64_t ttl_sec =
+      request.has_ttl ? request.ttl_sec
+                      : (header_ttl ? *header_ttl : cfg_default_ttl);
+
   LinuxCacheRecord rec;
   rec.key = key;
   rec.url = request.url;
@@ -913,8 +1266,7 @@ DownloadOutcome ExecuteDownload(
   rec.size_bytes = static_cast<int64_t>(length);
   rec.created_at_ms = now;
   rec.last_accessed_at_ms = now;
-  rec.expires_at_ms =
-      now + (request.has_ttl ? request.ttl_sec : g_default_ttl_seconds) * 1000LL;
+  rec.expires_at_ms = now + ttl_sec * 1000LL;
   rec.hit_count = 1;
   rec.tag = request.tag;
   rec.mime_type = downloaded.content_type.empty() ? "application/octet-stream"
@@ -922,23 +1274,36 @@ DownloadOutcome ExecuteDownload(
   rec.etag = downloaded.etag;
   rec.last_modified = downloaded.last_modified;
   rec.checksum = computed_hash;
-  rec.checksum_algorithm = request.checksum_alg;
+  rec.checksum_algorithm = checksum_alg_str;
   rec.pinned = request.pinned;
 
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::mutex> lock(g_index_mutex);
+    auto prev = g_entries.find(key);
+    if (prev != g_entries.end()) {
+      g_total_cached_bytes =
+          std::max<int64_t>(0, g_total_cached_bytes - prev->second.size_bytes);
+      if (prev->second.file_path != rec.file_path) {
+        std::remove(prev->second.file_path.c_str());
+      }
+    }
     g_entries[key] = rec;
-    if (g_auto_trim_on_write) {
-      EnforceQuotaLocked(g_max_disk_cache_bytes, key);
+    g_total_cached_bytes += rec.size_bytes;
+    if (cfg_auto_trim) {
+      EnforceQuotaLocked(cfg_max_bytes, cfg_max_entries, cfg_policy, key);
     }
     PersistIndexLocked();
   }
 
-  PostProgress(self, key, request.url, "completed", rec.size_bytes,
-               rec.size_bytes, rec.file_path);
-  return MakeSuccess(rec, "networkDownload", true,
-                     downloaded.status == 0 ? 200 : downloaded.status,
-                     CurrentTimeMs() - start_ms);
+  PostProgress(
+      self, key, request.url,
+      XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_COMPLETED,
+      rec.size_bytes, rec.size_bytes, rec.file_path);
+  return MakeSuccess(
+      rec,
+      XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_RESULT_SOURCE_NETWORK_DOWNLOAD,
+      true, downloaded.status == 0 ? 200 : downloaded.status,
+      CurrentTimeMs() - start_ms);
 }
 
 void FinishInFlight(const std::string& key,
@@ -946,7 +1311,7 @@ void FinishInFlight(const std::string& key,
                     const DownloadOutcome& outcome) {
   std::vector<std::function<void(const DownloadOutcome&)>> waiters;
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::mutex> lock(g_flight_mutex);
     auto it = g_in_flight.find(key);
     if (it != g_in_flight.end() && it->second == state) {
       waiters.swap(it->second->waiters);
@@ -968,17 +1333,14 @@ void ScheduleDownload(XueHuaNaviteCacheManagerPlugin* self,
     return;
   }
 
-  std::string key;
-  DownloadOutcome early;
-  bool has_early = false;
-  std::shared_ptr<InFlightDownload> state;
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    key = ResolveKeyLocked(request.url, request.custom_key);
-    if (!request.force_refresh) {
+  const std::string key = ResolveKey(request.url, request.custom_key);
+  if (!request.force_refresh) {
+    DownloadOutcome early;
+    bool has_early = false;
+    const int64_t now = CurrentTimeMs();
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
       auto it = g_entries.find(key);
-      const int64_t now = CurrentTimeMs();
       if (it != g_entries.end() &&
           g_file_test(it->second.file_path.c_str(), G_FILE_TEST_EXISTS) &&
           !it->second.IsExpired(now)) {
@@ -988,27 +1350,35 @@ void ScheduleDownload(XueHuaNaviteCacheManagerPlugin* self,
         if (request.pinned) it->second.pinned = true;
         g_hit_count++;
         PersistIndexLocked();
-        early = MakeSuccess(it->second, "cacheHit", false, 0, 0);
+        early = MakeSuccess(
+            it->second,
+            XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_RESULT_SOURCE_CACHE_HIT,
+            false, 0, 0);
         has_early = true;
       }
     }
-    if (!has_early) {
-      auto existing = g_in_flight.find(key);
-      if (existing != g_in_flight.end()) {
-        existing->second->waiters.push_back(std::move(callback));
-        return;
-      }
-      state = std::make_shared<InFlightDownload>();
-      state->waiters.push_back(std::move(callback));
-      g_in_flight[key] = state;
+    if (has_early) {
+      PostProgress(
+          self, key, request.url,
+          XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_CACHE_HIT,
+          early.entry.size_bytes, early.entry.size_bytes,
+          early.entry.file_path);
+      callback(early);
+      return;
     }
   }
 
-  if (has_early) {
-    EmitProgress(self, key, request.url, "cacheHit", early.entry.size_bytes,
-                 early.entry.size_bytes, early.entry.file_path);
-    callback(early);
-    return;
+  std::shared_ptr<InFlightDownload> state;
+  {
+    std::lock_guard<std::mutex> lock(g_flight_mutex);
+    auto existing = g_in_flight.find(key);
+    if (existing != g_in_flight.end()) {
+      existing->second->waiters.push_back(std::move(callback));
+      return;
+    }
+    state = std::make_shared<InFlightDownload>();
+    state->waiters.push_back(std::move(callback));
+    g_in_flight[key] = state;
   }
 
   XueHuaNaviteCacheManagerPlugin* plugin =
@@ -1018,8 +1388,10 @@ void ScheduleDownload(XueHuaNaviteCacheManagerPlugin* self,
     try {
       if (state->cancel_flag->load()) {
         outcome = MakeFailure("CANCELED", "Download canceled");
-        PostProgress(plugin, key, request.url, "canceled", 0, -1, "",
-                     "Download canceled");
+        PostProgress(
+            plugin, key, request.url,
+            XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_CANCELED, 0,
+            -1, "", "Download canceled");
       } else {
         outcome = ExecuteDownload(plugin, request, key, state->cancel_flag);
       }
@@ -1032,193 +1404,345 @@ void ScheduleDownload(XueHuaNaviteCacheManagerPlugin* self,
     g_object_unref(plugin);
   });
   if (!queued) {
-    FinishInFlight(key, state, MakeFailure("DOWNLOAD_FAILED", "Download pool is stopping"));
+    FinishInFlight(key, state,
+                   MakeFailure("DOWNLOAD_FAILED", "Download pool is stopping"));
     g_object_unref(plugin);
   }
 }
 
-void ScheduleDownloadReply(XueHuaNaviteCacheManagerPlugin* self,
-                           FlMethodCall* method_call,
-                           const DownloadRequest& request) {
-  g_object_ref(method_call);
-  ScheduleDownload(self, request, [method_call](const DownloadOutcome& outcome) {
-    auto* reply = new AsyncDownloadReply();
-    reply->method_call = method_call;
-    reply->outcome = outcome;
-    g_idle_add(DeliverDownloadReply, reply);
-  });
-}
+// MARK: - Pigeon CacheHostApi VTable Handlers
 
-void SchedulePrefetchReply(XueHuaNaviteCacheManagerPlugin* self,
-                           FlMethodCall* method_call,
-                           const std::vector<DownloadRequest>& requests) {
-  g_object_ref(method_call);
-  if (requests.empty()) {
-    auto* reply = new AsyncPrefetchReply();
-    reply->method_call = method_call;
-    g_idle_add(DeliverPrefetchReply, reply);
+void HandleConfigure(XueHuaCacheWireCacheManagerConfig* config,
+                     XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                     gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  if (!config) {
+    xue_hua_cache_cache_host_api_respond_error_configure(
+        response_handle, "INVALID_ARGS", "config is required", nullptr);
     return;
   }
-  struct PrefetchState {
-    std::mutex mu;
-    int remaining = 0;
-    std::vector<DownloadOutcome> slots;
-    bool posted = false;
-  };
-  auto prefetch_state = std::make_shared<PrefetchState>();
-  prefetch_state->remaining = static_cast<int>(requests.size());
-  prefetch_state->slots.resize(requests.size());
-  for (size_t index = 0; index < requests.size(); ++index) {
-    ScheduleDownload(
-        self, requests[index],
-        [method_call, prefetch_state, index](const DownloadOutcome& outcome) {
-          bool done = false;
-          std::vector<DownloadOutcome> slots;
-          {
-            std::lock_guard<std::mutex> lock(prefetch_state->mu);
-            prefetch_state->slots[index] = outcome;
-            prefetch_state->remaining -= 1;
-            if (prefetch_state->remaining == 0 && !prefetch_state->posted) {
-              prefetch_state->posted = true;
-              done = true;
-              slots = prefetch_state->slots;
-            }
-          }
-          if (done) {
-            auto* reply = new AsyncPrefetchReply();
-            reply->method_call = method_call;
-            reply->outcomes = std::move(slots);
-            g_idle_add(DeliverPrefetchReply, reply);
-          }
-        });
-  }
-}
 
-}  // namespace
+  const int64_t next_max_bytes = std::max<int64_t>(
+      1, xue_hua_cache_wire_cache_manager_config_get_max_disk_cache_bytes(config));
+  const int next_max_entries = std::max(
+      1, static_cast<int>(
+             xue_hua_cache_wire_cache_manager_config_get_max_entries(config)));
+  const int64_t next_default_ttl = std::max<int64_t>(
+      0, xue_hua_cache_wire_cache_manager_config_get_default_ttl_seconds(config));
+  const std::string next_policy = EvictionPolicyToString(
+      xue_hua_cache_wire_cache_manager_config_get_eviction_policy(config));
+  const gchar* raw_subdir =
+      xue_hua_cache_wire_cache_manager_config_get_cache_subdirectory(config);
+  const std::string trimmed_subdir = TrimAscii(raw_subdir ? raw_subdir : "");
+  const int next_conc = std::max(
+      1,
+      static_cast<int>(
+          xue_hua_cache_wire_cache_manager_config_get_max_concurrent_downloads(
+              config)));
+  const int next_connect_ms = std::max(
+      1,
+      static_cast<int>(
+          xue_hua_cache_wire_cache_manager_config_get_connect_timeout_ms(
+              config)));
+  const int next_read_ms = std::max(
+      1, static_cast<int>(
+             xue_hua_cache_wire_cache_manager_config_get_read_timeout_ms(
+                 config)));
+  const std::map<std::string, std::string> next_headers = ExtractFlStringMap(
+      xue_hua_cache_wire_cache_manager_config_get_default_headers(config));
+  const bool next_respect_http =
+      xue_hua_cache_wire_cache_manager_config_get_respect_http_cache_headers(
+          config) != FALSE;
+  const bool next_auto_trim =
+      xue_hua_cache_wire_cache_manager_config_get_auto_trim_on_write(config) !=
+      FALSE;
 
-FlMethodResponse* get_capabilities_response() {
-  g_autoptr(FlValue) caps = fl_value_new_map();
-  fl_value_set_string_take(caps, "platformName", fl_value_new_string("linux"));
-  fl_value_set_string_take(caps, "supportsFileSystemPaths",
-                           fl_value_new_bool(true));
-  fl_value_set_string_take(caps, "supportsConditionalHttpRevalidation",
-                           fl_value_new_bool(true));
-  fl_value_set_string_take(caps, "supportsNativeCryptoHash",
-                           fl_value_new_bool(true));
-  fl_value_set_string_take(caps, "supportsLowDiskSpaceNotifications",
-                           fl_value_new_bool(false));
-  fl_value_set_string_take(
-      caps, "storageMechanism",
-      fl_value_new_string("XDG_CACHE_HOME (g_get_user_cache_dir) + GChecksum"));
-  fl_value_set_string_take(caps, "defaultCacheRootPath",
-                           fl_value_new_string(GetCacheRootDir().c_str()));
-  return FL_METHOD_RESPONSE(fl_method_success_response_new(caps));
-}
-
-static void xue_hua_navite_cache_manager_plugin_handle_method_call(
-    XueHuaNaviteCacheManagerPlugin* self,
-    FlMethodCall* method_call) {
-  g_autoptr(FlMethodResponse) response = nullptr;
-  const gchar* method = fl_method_call_get_name(method_call);
-  FlValue* args = fl_method_call_get_args(method_call);
-
-  if (strcmp(method, "configure") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    g_max_disk_cache_bytes =
-        GetFlInt(args, "maxDiskCacheBytes", g_max_disk_cache_bytes);
-    g_max_entries =
-        static_cast<int>(GetFlInt(args, "maxEntries", g_max_entries));
-    g_default_ttl_seconds =
-        GetFlInt(args, "defaultTtlSeconds", g_default_ttl_seconds);
-    g_eviction_policy = GetFlString(args, "evictionPolicy", g_eviction_policy);
-    std::string subdir =
-        GetFlString(args, "cacheSubdirectory", g_cache_subdirectory);
-    if (!subdir.empty()) g_cache_subdirectory = subdir;
-    g_auto_trim_on_write =
-        GetFlBool(args, "autoTrimOnWrite", g_auto_trim_on_write);
-    g_respect_http_cache_headers = GetFlBool(
-        args, "respectHttpCacheHeaders", g_respect_http_cache_headers);
-    g_connect_timeout_ms = static_cast<int>(
-        GetFlInt(args, "connectTimeoutMs", g_connect_timeout_ms));
-    g_read_timeout_ms = static_cast<int>(
-        GetFlInt(args, "readTimeoutMs", g_read_timeout_ms));
-    if (HasFlKey(args, "maxConcurrentDownloads")) {
-      int conc = static_cast<int>(
-          GetFlInt(args, "maxConcurrentDownloads", g_max_concurrent_downloads));
-      if (conc < 1) conc = 1;
-      g_max_concurrent_downloads = conc;
-      GetDownloadPool().SetLimit(conc);
-    }
-    if (g_auto_trim_on_write) {
-      EnforceQuotaLocked(g_max_disk_cache_bytes, "");
-      PersistIndexLocked();
-    }
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
-  } else if (strcmp(method, "downloadFile") == 0) {
-    DownloadRequest request = ParseDownloadRequest(args);
-    ScheduleDownloadReply(self, method_call, request);
-    return;
-  } else if (strcmp(method, "prefetchAll") == 0) {
-    std::vector<DownloadRequest> requests;
-    FlValue* reqs = fl_value_lookup_string(args, "requests");
-    if (reqs && fl_value_get_type(reqs) == FL_VALUE_TYPE_LIST) {
-      size_t len = fl_value_get_length(reqs);
-      requests.reserve(len);
-      for (size_t i = 0; i < len; ++i) {
-        requests.push_back(ParseDownloadRequest(fl_value_get_list_value(reqs, i)));
-      }
-    }
-    SchedulePrefetchReply(self, method_call, requests);
-    return;
-  } else if (strcmp(method, "cancelDownload") == 0) {
-    std::string key_or_url = GetFlString(args, "keyOrUrl");
-    bool canceled = false;
+  g_object_ref(self);
+  g_object_ref(response_handle);
+  const bool queued = GetIoPool().Post([self, response_handle, next_max_bytes,
+                                        next_max_entries, next_default_ttl,
+                                        next_policy, trimmed_subdir, next_conc,
+                                        next_connect_ms, next_read_ms,
+                                        next_headers, next_respect_http,
+                                        next_auto_trim]() {
+    std::string prev_subdir;
+    std::string next_subdir;
     {
-      std::lock_guard<std::mutex> lock(g_mutex);
-      EnsureIndexLoadedLocked();
-      std::string key = ResolveKeyLocked(key_or_url);
-      auto it = g_in_flight.find(key);
-      if (it == g_in_flight.end()) it = g_in_flight.find(key_or_url);
-      if (it != g_in_flight.end()) {
-        it->second->cancel_flag->store(true);
-        canceled = true;
+      std::lock_guard<std::mutex> lock(g_config_mutex);
+      prev_subdir = g_cache_subdirectory;
+      g_max_disk_cache_bytes = next_max_bytes;
+      g_max_entries = next_max_entries;
+      g_default_ttl_seconds = next_default_ttl;
+      g_eviction_policy = next_policy;
+      next_subdir = trimmed_subdir.empty() ? prev_subdir : trimmed_subdir;
+      g_connect_timeout_ms = next_connect_ms;
+      g_read_timeout_ms = next_read_ms;
+      g_default_headers = next_headers;
+      g_respect_http_cache_headers = next_respect_http;
+      g_auto_trim_on_write = next_auto_trim;
+    }
+
+    GetDownloadPool().SetLimit(next_conc);
+
+    if (prev_subdir != next_subdir) {
+      GetPersistCoordinator().FlushNow(prev_subdir);
+      {
+        std::lock_guard<std::mutex> lock(g_index_mutex);
+        g_index_dirty.store(false, std::memory_order_release);
+        g_index_loaded = false;
+        g_entries.clear();
+        g_total_cached_bytes = 0;
+        g_hit_count = 0;
+        g_miss_count = 0;
+        g_eviction_count = 0;
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_config_mutex);
+        g_cache_subdirectory = next_subdir;
       }
     }
-    g_autoptr(FlValue) res = fl_value_new_bool(canceled);
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(res));
-  } else if (strcmp(method, "getFileFromCache") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    std::string key = ResolveKeyLocked(GetFlString(args, "keyOrUrl"));
-    bool ignore_expired = GetFlBool(args, "ignoreExpired", true);
-    auto it = g_entries.find(key);
-    int64_t now = CurrentTimeMs();
-    if (it == g_entries.end() ||
-        !g_file_test(it->second.file_path.c_str(), G_FILE_TEST_EXISTS) ||
-        (ignore_expired && it->second.IsExpired(now))) {
-      g_miss_count++;
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
-    } else {
-      it->second.last_accessed_at_ms = now;
-      it->second.hit_count++;
-      g_hit_count++;
-      PersistIndexLocked();
-      g_autoptr(FlValue) map = it->second.ToFlValue();
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(map));
+
+    EnsureIndexLoaded();
+    if (next_auto_trim) {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      const int evicted = EnforceQuotaLocked(next_max_bytes, next_max_entries,
+                                             next_policy, "");
+      if (evicted > 0) PersistIndexLocked();
     }
-  } else if (strcmp(method, "readCacheBytes") == 0) {
+
+    PostMainResponse(self, response_handle, [response_handle]() {
+      xue_hua_cache_cache_host_api_respond_configure(response_handle);
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandleDownloadFile(XueHuaCacheWireCacheRequest* request,
+                        XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                        gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  DownloadRequest parsed = ParseDownloadRequest(request);
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle, parsed]() {
+    EnsureIndexLoaded();
+    ScheduleDownload(self, parsed, [self, response_handle](
+                                       const DownloadOutcome& outcome) {
+      PostMainResponse(self, response_handle, [response_handle, outcome]() {
+        if (outcome.ok) {
+          g_autoptr(XueHuaCacheWireCacheFetchResult) res =
+              OutcomeToWireResult(outcome);
+          xue_hua_cache_cache_host_api_respond_download_file(response_handle,
+                                                             res);
+        } else {
+          xue_hua_cache_cache_host_api_respond_error_download_file(
+              response_handle, outcome.error_code.c_str(),
+              outcome.error_message.c_str(), nullptr);
+        }
+      });
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandlePrefetchAll(FlValue* requests,
+                       XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                       gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  std::vector<DownloadRequest> parsed;
+  if (requests && fl_value_get_type(requests) == FL_VALUE_TYPE_LIST) {
+    const size_t len = fl_value_get_length(requests);
+    parsed.reserve(len);
+    for (size_t i = 0; i < len; ++i) {
+      FlValue* item = fl_value_get_list_value(requests, i);
+      if (item && fl_value_get_type(item) == FL_VALUE_TYPE_CUSTOM &&
+          fl_value_get_custom_type(item) ==
+              xue_hua_cache_wire_cache_request_type_id) {
+        auto* wire_req = XUE_HUA_CACHE_WIRE_CACHE_REQUEST(
+            fl_value_get_custom_value_object(item));
+        parsed.push_back(ParseDownloadRequest(wire_req));
+      }
+    }
+  }
+
+  if (parsed.empty()) {
+    g_autoptr(FlValue) empty = fl_value_new_list();
+    xue_hua_cache_cache_host_api_respond_prefetch_all(response_handle, empty);
+    return;
+  }
+
+  g_object_ref(self);
+  g_object_ref(response_handle);
+  const bool queued = GetIoPool().Post([self, response_handle,
+                                        parsed = std::move(parsed)]() {
+    EnsureIndexLoaded();
+    struct PrefetchState {
+      std::mutex mu;
+      size_t remaining = 0;
+      std::vector<DownloadOutcome> slots;
+      bool posted = false;
+    };
+    auto prefetch_state = std::make_shared<PrefetchState>();
+    prefetch_state->remaining = parsed.size();
+    prefetch_state->slots.resize(parsed.size());
+
+    for (size_t index = 0; index < parsed.size(); ++index) {
+      ScheduleDownload(
+          self, parsed[index],
+          [self, response_handle, prefetch_state,
+           index](const DownloadOutcome& outcome) {
+            bool done = false;
+            std::vector<DownloadOutcome> slots;
+            {
+              std::lock_guard<std::mutex> lock(prefetch_state->mu);
+              prefetch_state->slots[index] = outcome;
+              prefetch_state->remaining -= 1;
+              if (prefetch_state->remaining == 0 && !prefetch_state->posted) {
+                prefetch_state->posted = true;
+                done = true;
+                slots = std::move(prefetch_state->slots);
+              }
+            }
+            if (done) {
+              PostMainResponse(
+                  self, response_handle,
+                  [response_handle, slots = std::move(slots)]() {
+                    g_autoptr(FlValue) list = fl_value_new_list();
+                    for (const auto& item : slots) {
+                      if (!item.ok) continue;
+                      g_autoptr(XueHuaCacheWireCacheEntry) wire =
+                          item.entry.ToWireEntry();
+                      fl_value_append_take(
+                          list, fl_value_new_custom_object(
+                                    xue_hua_cache_wire_cache_entry_type_id,
+                                    G_OBJECT(wire)));
+                    }
+                    xue_hua_cache_cache_host_api_respond_prefetch_all(
+                        response_handle, list);
+                  });
+            }
+          });
+    }
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+XueHuaCacheCacheHostApiCancelDownloadResponse* HandleCancelDownload(
+    const gchar* key_or_url,
+    gpointer /*user_data*/) {
+  return cancel_download_response(key_or_url);
+}
+
+void HandleGetFileFromCache(
+    const gchar* key_or_url,
+    gboolean ignore_expired,
+    XueHuaCacheCacheHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  const std::string target = key_or_url ? key_or_url : "";
+  const bool check_expired = ignore_expired != FALSE;
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle, target,
+                                        check_expired]() {
+    EnsureIndexLoaded();
+    const std::string key = ResolveKey(target);
+    std::optional<LinuxCacheRecord> found;
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      auto it = g_entries.find(key);
+      const int64_t now = CurrentTimeMs();
+      if (it == g_entries.end()) {
+        g_miss_count++;
+      } else if (!g_file_test(it->second.file_path.c_str(),
+                              G_FILE_TEST_EXISTS)) {
+        g_total_cached_bytes =
+            std::max<int64_t>(0, g_total_cached_bytes - it->second.size_bytes);
+        g_entries.erase(it);
+        g_miss_count++;
+        PersistIndexLocked();
+      } else if (check_expired && it->second.IsExpired(now)) {
+        g_miss_count++;
+      } else {
+        it->second.last_accessed_at_ms = now;
+        it->second.hit_count++;
+        g_hit_count++;
+        PersistIndexLocked();
+        found = it->second;
+      }
+    }
+    if (found.has_value()) {
+      PostProgress(
+          self, found->key, found->url,
+          XUE_HUA_NAVITE_CACHE_MANAGER_WIRE_CACHE_TRANSFER_STATE_CACHE_HIT,
+          found->size_bytes, found->size_bytes, found->file_path);
+    }
+    PostMainResponse(self, response_handle, [response_handle, found]() {
+      if (found.has_value()) {
+        g_autoptr(XueHuaCacheWireCacheEntry) wire = found->ToWireEntry();
+        xue_hua_cache_cache_host_api_respond_get_file_from_cache(
+            response_handle, wire);
+      } else {
+        xue_hua_cache_cache_host_api_respond_get_file_from_cache(
+            response_handle, nullptr);
+      }
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandleReadCacheBytes(
+    const gchar* key_or_url,
+    gboolean ignore_expired,
+    XueHuaCacheCacheHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  const std::string target = key_or_url ? key_or_url : "";
+  const bool check_expired = ignore_expired != FALSE;
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle, target,
+                                        check_expired]() {
+    EnsureIndexLoaded();
+    const std::string key = ResolveKey(target);
     std::string file_path;
     {
-      std::lock_guard<std::mutex> lock(g_mutex);
-      EnsureIndexLoadedLocked();
-      std::string key = ResolveKeyLocked(GetFlString(args, "keyOrUrl"));
-      bool ignore_expired = GetFlBool(args, "ignoreExpired", true);
+      std::lock_guard<std::mutex> lock(g_index_mutex);
       auto it = g_entries.find(key);
-      int64_t now = CurrentTimeMs();
-      if (it != g_entries.end() &&
-          (!ignore_expired || !it->second.IsExpired(now)) &&
-          g_file_test(it->second.file_path.c_str(), G_FILE_TEST_EXISTS)) {
+      const int64_t now = CurrentTimeMs();
+      if (it == g_entries.end()) {
+        g_miss_count++;
+      } else if (!g_file_test(it->second.file_path.c_str(),
+                              G_FILE_TEST_EXISTS)) {
+        g_total_cached_bytes =
+            std::max<int64_t>(0, g_total_cached_bytes - it->second.size_bytes);
+        g_entries.erase(it);
+        g_miss_count++;
+        PersistIndexLocked();
+      } else if (!check_expired || !it->second.IsExpired(now)) {
         it->second.last_accessed_at_ms = now;
         it->second.hit_count++;
         g_hit_count++;
@@ -1228,308 +1752,769 @@ static void xue_hua_navite_cache_manager_plugin_handle_method_call(
         g_miss_count++;
       }
     }
-    if (file_path.empty()) {
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
-    } else {
+
+    std::optional<std::vector<uint8_t>> bytes_out;
+    if (!file_path.empty()) {
       gchar* contents = nullptr;
       gsize length = 0;
       if (g_file_get_contents(file_path.c_str(), &contents, &length, nullptr)) {
-        g_autoptr(FlValue) bytes = fl_value_new_uint8_list(
-            reinterpret_cast<const uint8_t*>(contents), length);
+        bytes_out = std::vector<uint8_t>(
+            reinterpret_cast<const uint8_t*>(contents),
+            reinterpret_cast<const uint8_t*>(contents) + length);
         g_free(contents);
-        response = FL_METHOD_RESPONSE(fl_method_success_response_new(bytes));
-      } else {
-        response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
       }
     }
-  } else if (strcmp(method, "containsKey") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    std::string key = ResolveKeyLocked(GetFlString(args, "keyOrUrl"));
-    bool ignore_expired = GetFlBool(args, "ignoreExpired", true);
-    auto it = g_entries.find(key);
-    bool exists =
-        it != g_entries.end() &&
-        g_file_test(it->second.file_path.c_str(), G_FILE_TEST_EXISTS) &&
-        (!ignore_expired || !it->second.IsExpired(CurrentTimeMs()));
-    g_autoptr(FlValue) val = fl_value_new_bool(exists);
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(val));
-  } else if (strcmp(method, "putBytes") == 0) {
-    std::string key = GetFlString(args, "key");
-    FlValue* bytes_val = fl_value_lookup_string(args, "bytes");
-    if (key.empty() || !bytes_val ||
-        fl_value_get_type(bytes_val) != FL_VALUE_TYPE_UINT8_LIST) {
-      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
-          "INVALID_ARGS", "key and bytes are required", nullptr));
-    } else {
-      const uint8_t* raw = fl_value_get_uint8_list(bytes_val);
-      size_t len = fl_value_get_length(bytes_val);
-      std::string url = GetFlString(args, "url", "local://" + key);
-      std::string file_ext = GetFlString(args, "fileExtension");
-      std::string mime_type =
-          GetFlString(args, "mimeType", "application/octet-stream");
-      std::string tag = GetFlString(args, "tag");
-      int64_t ttl_sec = GetFlInt(args, "ttlSeconds", g_default_ttl_seconds);
-      bool pinned = GetFlBool(args, "pinned", false);
 
-      std::string ext = InferExtension(url, mime_type, file_ext);
-      std::string dest_path = GetCacheRootDir() + "/" + key + "." + ext;
-      g_file_set_contents(dest_path.c_str(),
-                          reinterpret_cast<const gchar*>(raw), len, nullptr);
+    PostMainResponse(
+        self, response_handle,
+        [response_handle, bytes_out = std::move(bytes_out)]() {
+          if (bytes_out.has_value()) {
+            const uint8_t empty_byte = 0;
+            const uint8_t* ptr =
+                bytes_out->empty() ? &empty_byte : bytes_out->data();
+            xue_hua_cache_cache_host_api_respond_read_cache_bytes(
+                response_handle, ptr, bytes_out->size());
+          } else {
+            xue_hua_cache_cache_host_api_respond_read_cache_bytes(
+                response_handle, nullptr, 0);
+          }
+        });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
 
-      int64_t now = CurrentTimeMs();
-      LinuxCacheRecord rec;
-      rec.key = key;
-      rec.url = url;
-      rec.file_path = dest_path;
-      rec.size_bytes = static_cast<int64_t>(len);
-      rec.created_at_ms = now;
-      rec.last_accessed_at_ms = now;
-      rec.expires_at_ms = now + ttl_sec * 1000LL;
-      rec.hit_count = 1;
-      rec.tag = tag;
-      rec.mime_type = mime_type;
-      rec.checksum = ComputeGLibHash(raw, len, "sha256");
-      rec.checksum_algorithm = "sha256";
-      rec.pinned = pinned;
+void HandleContainsKey(const gchar* key_or_url,
+                       gboolean ignore_expired,
+                       XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                       gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  const std::string target = key_or_url ? key_or_url : "";
+  const bool check_expired = ignore_expired != FALSE;
+  g_object_ref(self);
+  g_object_ref(response_handle);
 
-      {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        EnsureIndexLoadedLocked();
-        g_entries[key] = rec;
-        if (g_auto_trim_on_write) {
-          EnforceQuotaLocked(g_max_disk_cache_bytes, key);
+  const bool queued = GetIoPool().Post([self, response_handle, target,
+                                        check_expired]() {
+    EnsureIndexLoaded();
+    const std::string key = ResolveKey(target);
+    bool exists = false;
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      auto it = g_entries.find(key);
+      exists =
+          it != g_entries.end() &&
+          g_file_test(it->second.file_path.c_str(), G_FILE_TEST_EXISTS) &&
+          (!check_expired || !it->second.IsExpired(CurrentTimeMs()));
+    }
+    PostMainResponse(self, response_handle, [response_handle, exists]() {
+      xue_hua_cache_cache_host_api_respond_contains_key(
+          response_handle, exists ? TRUE : FALSE);
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandlePutBytes(const gchar* key,
+                    const uint8_t* bytes,
+                    size_t bytes_length,
+                    const gchar* url,
+                    const gchar* file_extension,
+                    const gchar* mime_type,
+                    const gchar* tag,
+                    int64_t* ttl_seconds,
+                    gboolean pinned,
+                    XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                    gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  const std::string clean_key = TrimAscii(key ? key : "");
+  if (clean_key.empty()) {
+    xue_hua_cache_cache_host_api_respond_error_put_bytes(
+        response_handle, "INVALID_ARGS", "key and bytes are required", nullptr);
+    return;
+  }
+
+  std::vector<uint8_t> bytes_copy;
+  if (bytes_length > 0 && bytes != nullptr) {
+    bytes_copy.assign(bytes, bytes + bytes_length);
+  }
+  const std::string url_str = url ? url : ("local://" + clean_key);
+  const std::string ext_str = file_extension ? file_extension : "";
+  const std::string mime_str =
+      (mime_type && mime_type[0] != '\0') ? mime_type
+                                          : "application/octet-stream";
+  const std::string tag_str = tag ? tag : "";
+  const std::optional<int64_t> ttl_opt =
+      ttl_seconds ? std::optional<int64_t>(*ttl_seconds) : std::nullopt;
+  const bool is_pinned = pinned != FALSE;
+
+  g_object_ref(self);
+  g_object_ref(response_handle);
+  const bool queued = GetIoPool().Post([self, response_handle, clean_key,
+                                        bytes_copy = std::move(bytes_copy),
+                                        url_str, ext_str, mime_str, tag_str,
+                                        ttl_opt, is_pinned]() {
+    EnsureIndexLoaded();
+
+    int64_t cfg_default_ttl = 7LL * 24LL * 3600LL;
+    int64_t cfg_max_bytes = 500LL * 1024LL * 1024LL;
+    int cfg_max_entries = 20000;
+    std::string cfg_policy = "lru";
+    bool cfg_auto_trim = true;
+    {
+      std::lock_guard<std::mutex> lock(g_config_mutex);
+      cfg_default_ttl = g_default_ttl_seconds;
+      cfg_max_bytes = g_max_disk_cache_bytes;
+      cfg_max_entries = g_max_entries;
+      cfg_policy = g_eviction_policy;
+      cfg_auto_trim = g_auto_trim_on_write;
+    }
+
+    const std::string ext = InferExtension(url_str, mime_str, ext_str);
+    const std::string dest_path =
+        GetCacheRootDir(true) + "/" + clean_key + "." + ext;
+    const std::string tmp_path = dest_path + ".tmp";
+    const gchar* write_ptr =
+        bytes_copy.empty() ? "" : reinterpret_cast<const gchar*>(bytes_copy.data());
+    GError* write_err = nullptr;
+    if (!g_file_set_contents(tmp_path.c_str(), write_ptr, bytes_copy.size(),
+                             &write_err) ||
+        std::rename(tmp_path.c_str(), dest_path.c_str()) != 0) {
+      std::string err_msg =
+          write_err ? write_err->message : "Failed writing cache file";
+      if (write_err) g_error_free(write_err);
+      std::remove(tmp_path.c_str());
+      PostMainResponse(self, response_handle, [response_handle, err_msg]() {
+        xue_hua_cache_cache_host_api_respond_error_put_bytes(
+            response_handle, "PUT_BYTES_FAILED", err_msg.c_str(), nullptr);
+      });
+      g_object_unref(response_handle);
+      g_object_unref(self);
+      return;
+    }
+
+    const int64_t now = CurrentTimeMs();
+    const int64_t ttl_sec = ttl_opt ? *ttl_opt : cfg_default_ttl;
+    LinuxCacheRecord rec;
+    rec.key = clean_key;
+    rec.url = url_str;
+    rec.file_path = dest_path;
+    rec.size_bytes = static_cast<int64_t>(bytes_copy.size());
+    rec.created_at_ms = now;
+    rec.last_accessed_at_ms = now;
+    rec.expires_at_ms = now + ttl_sec * 1000LL;
+    rec.hit_count = 1;
+    rec.tag = tag_str;
+    rec.mime_type = mime_str;
+    rec.checksum =
+        ComputeGLibHash(bytes_copy.data(), bytes_copy.size(), "sha256");
+    rec.checksum_algorithm = "sha256";
+    rec.pinned = is_pinned;
+
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      auto prev = g_entries.find(clean_key);
+      if (prev != g_entries.end()) {
+        g_total_cached_bytes =
+            std::max<int64_t>(0, g_total_cached_bytes - prev->second.size_bytes);
+        if (prev->second.file_path != rec.file_path) {
+          std::remove(prev->second.file_path.c_str());
         }
-        PersistIndexLocked();
       }
-      g_autoptr(FlValue) out_map = rec.ToFlValue();
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(out_map));
+      g_entries[clean_key] = rec;
+      g_total_cached_bytes += rec.size_bytes;
+      if (cfg_auto_trim) {
+        EnforceQuotaLocked(cfg_max_bytes, cfg_max_entries, cfg_policy,
+                           clean_key);
+      }
+      PersistIndexLocked();
     }
-  } else if (strcmp(method, "putFile") == 0) {
-    std::string key = GetFlString(args, "key");
-    std::string source_path = GetFlString(args, "sourceFilePath");
+
+    PostMainResponse(self, response_handle, [response_handle, rec]() {
+      g_autoptr(XueHuaCacheWireCacheEntry) wire = rec.ToWireEntry();
+      xue_hua_cache_cache_host_api_respond_put_bytes(response_handle, wire);
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandlePutFile(const gchar* key,
+                   const gchar* source_file_path,
+                   const gchar* url,
+                   const gchar* file_extension,
+                   const gchar* mime_type,
+                   const gchar* tag,
+                   int64_t* ttl_seconds,
+                   gboolean pinned,
+                   XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                   gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  const std::string clean_key = TrimAscii(key ? key : "");
+  const std::string clean_source =
+      TrimAscii(source_file_path ? source_file_path : "");
+  if (clean_key.empty() || clean_source.empty()) {
+    xue_hua_cache_cache_host_api_respond_error_put_file(
+        response_handle, "INVALID_SOURCE", "Source file does not exist",
+        nullptr);
+    return;
+  }
+
+  const std::string url_str = url ? url : ("file://" + clean_source);
+  std::string ext_str = file_extension ? file_extension : "";
+  if (ext_str.empty()) {
+    auto slash = clean_source.find_last_of('/');
+    std::string fname =
+        (slash == std::string::npos) ? clean_source : clean_source.substr(slash + 1);
+    auto dot = fname.find_last_of('.');
+    if (dot != std::string::npos && dot + 1 < fname.size()) {
+      ext_str = fname.substr(dot + 1);
+    }
+  }
+  const std::string mime_str =
+      (mime_type && mime_type[0] != '\0') ? mime_type
+                                          : "application/octet-stream";
+  const std::string tag_str = tag ? tag : "";
+  const std::optional<int64_t> ttl_opt =
+      ttl_seconds ? std::optional<int64_t>(*ttl_seconds) : std::nullopt;
+  const bool is_pinned = pinned != FALSE;
+
+  g_object_ref(self);
+  g_object_ref(response_handle);
+  const bool queued = GetIoPool().Post([self, response_handle, clean_key,
+                                        clean_source, url_str, ext_str,
+                                        mime_str, tag_str, ttl_opt,
+                                        is_pinned]() {
+    EnsureIndexLoaded();
+
     gchar* contents = nullptr;
     gsize len = 0;
-    if (key.empty() || source_path.empty() ||
-        !g_file_get_contents(source_path.c_str(), &contents, &len, nullptr)) {
-      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
-          "INVALID_SOURCE", "Source file does not exist", nullptr));
-    } else {
-      std::string url = GetFlString(args, "url", "file://" + source_path);
-      std::string file_ext = GetFlString(args, "fileExtension");
-      std::string mime_type =
-          GetFlString(args, "mimeType", "application/octet-stream");
-      std::string tag = GetFlString(args, "tag");
-      int64_t ttl_sec = GetFlInt(args, "ttlSeconds", g_default_ttl_seconds);
-      bool pinned = GetFlBool(args, "pinned", false);
+    if (!g_file_get_contents(clean_source.c_str(), &contents, &len, nullptr)) {
+      PostMainResponse(self, response_handle, [response_handle]() {
+        xue_hua_cache_cache_host_api_respond_error_put_file(
+            response_handle, "INVALID_SOURCE", "Source file does not exist",
+            nullptr);
+      });
+      g_object_unref(response_handle);
+      g_object_unref(self);
+      return;
+    }
 
-      std::string ext = InferExtension(url, mime_type, file_ext);
-      std::string dest_path = GetCacheRootDir() + "/" + key + "." + ext;
-      g_file_set_contents(dest_path.c_str(), contents, len, nullptr);
+    int64_t cfg_default_ttl = 7LL * 24LL * 3600LL;
+    int64_t cfg_max_bytes = 500LL * 1024LL * 1024LL;
+    int cfg_max_entries = 20000;
+    std::string cfg_policy = "lru";
+    bool cfg_auto_trim = true;
+    {
+      std::lock_guard<std::mutex> lock(g_config_mutex);
+      cfg_default_ttl = g_default_ttl_seconds;
+      cfg_max_bytes = g_max_disk_cache_bytes;
+      cfg_max_entries = g_max_entries;
+      cfg_policy = g_eviction_policy;
+      cfg_auto_trim = g_auto_trim_on_write;
+    }
 
-      int64_t now = CurrentTimeMs();
-      LinuxCacheRecord rec;
-      rec.key = key;
-      rec.url = url;
-      rec.file_path = dest_path;
-      rec.size_bytes = static_cast<int64_t>(len);
-      rec.created_at_ms = now;
-      rec.last_accessed_at_ms = now;
-      rec.expires_at_ms = now + ttl_sec * 1000LL;
-      rec.hit_count = 1;
-      rec.tag = tag;
-      rec.mime_type = mime_type;
-      rec.checksum = ComputeGLibHash(reinterpret_cast<const uint8_t*>(contents),
-                                     len, "sha256");
-      rec.checksum_algorithm = "sha256";
-      rec.pinned = pinned;
+    const std::string ext = InferExtension(url_str, mime_str, ext_str);
+    const std::string dest_path =
+        GetCacheRootDir(true) + "/" + clean_key + "." + ext;
+    const std::string tmp_path = dest_path + ".tmp";
+    GError* write_err = nullptr;
+    if (!g_file_set_contents(tmp_path.c_str(), contents, len, &write_err) ||
+        std::rename(tmp_path.c_str(), dest_path.c_str()) != 0) {
+      std::string err_msg =
+          write_err ? write_err->message : "Failed writing cache file";
+      if (write_err) g_error_free(write_err);
       g_free(contents);
+      std::remove(tmp_path.c_str());
+      PostMainResponse(self, response_handle, [response_handle, err_msg]() {
+        xue_hua_cache_cache_host_api_respond_error_put_file(
+            response_handle, "PUT_FILE_FAILED", err_msg.c_str(), nullptr);
+      });
+      g_object_unref(response_handle);
+      g_object_unref(self);
+      return;
+    }
 
-      {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        EnsureIndexLoadedLocked();
-        g_entries[key] = rec;
-        if (g_auto_trim_on_write) {
-          EnforceQuotaLocked(g_max_disk_cache_bytes, key);
+    const std::string checksum = ComputeGLibHash(
+        reinterpret_cast<const uint8_t*>(contents), len, "sha256");
+    g_free(contents);
+
+    const int64_t now = CurrentTimeMs();
+    const int64_t ttl_sec = ttl_opt ? *ttl_opt : cfg_default_ttl;
+    LinuxCacheRecord rec;
+    rec.key = clean_key;
+    rec.url = url_str;
+    rec.file_path = dest_path;
+    rec.size_bytes = static_cast<int64_t>(len);
+    rec.created_at_ms = now;
+    rec.last_accessed_at_ms = now;
+    rec.expires_at_ms = now + ttl_sec * 1000LL;
+    rec.hit_count = 1;
+    rec.tag = tag_str;
+    rec.mime_type = mime_str;
+    rec.checksum = checksum;
+    rec.checksum_algorithm = "sha256";
+    rec.pinned = is_pinned;
+
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      auto prev = g_entries.find(clean_key);
+      if (prev != g_entries.end()) {
+        g_total_cached_bytes =
+            std::max<int64_t>(0, g_total_cached_bytes - prev->second.size_bytes);
+        if (prev->second.file_path != rec.file_path) {
+          std::remove(prev->second.file_path.c_str());
         }
-        PersistIndexLocked();
       }
-      g_autoptr(FlValue) out_map = rec.ToFlValue();
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(out_map));
-    }
-  } else if (strcmp(method, "setPinned") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    std::string key = ResolveKeyLocked(GetFlString(args, "keyOrUrl"));
-    bool pinned = GetFlBool(args, "pinned", false);
-    auto it = g_entries.find(key);
-    if (it == g_entries.end()) {
-      g_autoptr(FlValue) res = fl_value_new_bool(false);
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(res));
-    } else {
-      it->second.pinned = pinned;
+      g_entries[clean_key] = rec;
+      g_total_cached_bytes += rec.size_bytes;
+      if (cfg_auto_trim) {
+        EnforceQuotaLocked(cfg_max_bytes, cfg_max_entries, cfg_policy,
+                           clean_key);
+      }
       PersistIndexLocked();
-      g_autoptr(FlValue) res = fl_value_new_bool(true);
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(res));
     }
-  } else if (strcmp(method, "removeFile") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    std::string key = ResolveKeyLocked(GetFlString(args, "keyOrUrl"));
-    auto it = g_entries.find(key);
-    if (it == g_entries.end()) {
-      g_autoptr(FlValue) res = fl_value_new_bool(false);
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(res));
-    } else {
-      std::remove(it->second.file_path.c_str());
-      g_entries.erase(it);
-      PersistIndexLocked();
-      g_autoptr(FlValue) res = fl_value_new_bool(true);
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(res));
-    }
-  } else if (strcmp(method, "removeByTag") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    std::string tag = GetFlString(args, "tag");
-    std::vector<std::string> keys;
-    for (const auto& kv : g_entries) {
-      if (kv.second.tag == tag) keys.push_back(kv.first);
-    }
-    for (const auto& k : keys) {
-      std::remove(g_entries[k].file_path.c_str());
-      g_entries.erase(k);
-    }
-    if (!keys.empty()) PersistIndexLocked();
-    g_autoptr(FlValue) res = fl_value_new_int(static_cast<int64_t>(keys.size()));
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(res));
-  } else if (strcmp(method, "removeExpired") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    int removed = RemoveExpiredLocked();
-    if (removed > 0) PersistIndexLocked();
-    g_autoptr(FlValue) res = fl_value_new_int(removed);
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(res));
-  } else if (strcmp(method, "trimToSize") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    int64_t max_bytes = GetFlInt(args, "maxBytes", g_max_disk_cache_bytes);
-    int evicted = EnforceQuotaLocked(max_bytes, "");
-    if (evicted > 0) PersistIndexLocked();
-    g_autoptr(FlValue) res = fl_value_new_int(evicted);
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(res));
-  } else if (strcmp(method, "clearAll") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    bool include_pinned = GetFlBool(args, "includePinned", true);
-    std::vector<std::string> keys;
-    for (const auto& kv : g_entries) {
-      if (include_pinned || !kv.second.pinned) keys.push_back(kv.first);
-    }
-    for (const auto& k : keys) {
-      std::remove(g_entries[k].file_path.c_str());
-      g_entries.erase(k);
-    }
-    PersistIndexLocked();
-    g_autoptr(FlValue) res = fl_value_new_int(static_cast<int64_t>(keys.size()));
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(res));
-  } else if (strcmp(method, "listEntries") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    bool has_tag = HasFlKey(args, "tag");
-    std::string tag = GetFlString(args, "tag");
-    bool include_expired = GetFlBool(args, "includeExpired", true);
-    int64_t now = CurrentTimeMs();
 
+    PostMainResponse(self, response_handle, [response_handle, rec]() {
+      g_autoptr(XueHuaCacheWireCacheEntry) wire = rec.ToWireEntry();
+      xue_hua_cache_cache_host_api_respond_put_file(response_handle, wire);
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandleSetPinned(const gchar* key_or_url,
+                     gboolean pinned,
+                     XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                     gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  const std::string target = key_or_url ? key_or_url : "";
+  const bool next_pinned = pinned != FALSE;
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle, target,
+                                        next_pinned]() {
+    EnsureIndexLoaded();
+    const std::string key = ResolveKey(target);
+    bool updated = false;
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      auto it = g_entries.find(key);
+      if (it != g_entries.end()) {
+        it->second.pinned = next_pinned;
+        PersistIndexLocked();
+        updated = true;
+      }
+    }
+    PostMainResponse(self, response_handle, [response_handle, updated]() {
+      xue_hua_cache_cache_host_api_respond_set_pinned(
+          response_handle, updated ? TRUE : FALSE);
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandleRemoveFile(const gchar* key_or_url,
+                      XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                      gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  const std::string target = key_or_url ? key_or_url : "";
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle, target]() {
+    EnsureIndexLoaded();
+    const std::string key = ResolveKey(target);
+    std::string path_to_delete;
+    bool removed = false;
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      auto it = g_entries.find(key);
+      if (it != g_entries.end()) {
+        path_to_delete = it->second.file_path;
+        g_total_cached_bytes =
+            std::max<int64_t>(0, g_total_cached_bytes - it->second.size_bytes);
+        g_entries.erase(it);
+        PersistIndexLocked();
+        removed = true;
+      }
+    }
+    if (!path_to_delete.empty()) {
+      std::remove(path_to_delete.c_str());
+    }
+    PostMainResponse(self, response_handle, [response_handle, removed]() {
+      xue_hua_cache_cache_host_api_respond_remove_file(
+          response_handle, removed ? TRUE : FALSE);
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandleRemoveByTag(const gchar* tag,
+                       XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                       gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  const std::string target_tag = tag ? tag : "";
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle, target_tag]() {
+    EnsureIndexLoaded();
+    std::vector<std::string> paths;
+    int64_t count = 0;
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      std::vector<std::string> keys;
+      for (const auto& kv : g_entries) {
+        if (kv.second.tag == target_tag) keys.push_back(kv.first);
+      }
+      paths.reserve(keys.size());
+      for (const auto& k : keys) {
+        auto it = g_entries.find(k);
+        if (it != g_entries.end()) {
+          paths.push_back(it->second.file_path);
+          g_total_cached_bytes =
+              std::max<int64_t>(0, g_total_cached_bytes - it->second.size_bytes);
+          g_entries.erase(it);
+        }
+      }
+      count = static_cast<int64_t>(keys.size());
+      if (count > 0) PersistIndexLocked();
+    }
+    for (const auto& path : paths) {
+      std::remove(path.c_str());
+    }
+    PostMainResponse(self, response_handle, [response_handle, count]() {
+      xue_hua_cache_cache_host_api_respond_remove_by_tag(response_handle,
+                                                         count);
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandleRemoveExpired(XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                         gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle]() {
+    EnsureIndexLoaded();
+    int64_t removed = 0;
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      removed = static_cast<int64_t>(RemoveExpiredLocked());
+      if (removed > 0) PersistIndexLocked();
+    }
+    PostMainResponse(self, response_handle, [response_handle, removed]() {
+      xue_hua_cache_cache_host_api_respond_remove_expired(response_handle,
+                                                          removed);
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandleTrimToSize(int64_t max_bytes,
+                      XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                      gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle, max_bytes]() {
+    EnsureIndexLoaded();
+    int cfg_max_entries = 20000;
+    std::string cfg_policy = "lru";
+    {
+      std::lock_guard<std::mutex> lock(g_config_mutex);
+      cfg_max_entries = g_max_entries;
+      cfg_policy = g_eviction_policy;
+    }
+    int64_t evicted = 0;
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      evicted = static_cast<int64_t>(
+          EnforceQuotaLocked(max_bytes, cfg_max_entries, cfg_policy, ""));
+      if (evicted > 0) PersistIndexLocked();
+    }
+    PostMainResponse(self, response_handle, [response_handle, evicted]() {
+      xue_hua_cache_cache_host_api_respond_trim_to_size(response_handle,
+                                                        evicted);
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandleClearAll(gboolean include_pinned,
+                    XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                    gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  const bool clear_pinned = include_pinned != FALSE;
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle, clear_pinned]() {
+    EnsureIndexLoaded();
+    std::vector<std::string> paths;
+    int64_t count = 0;
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      std::vector<std::string> keys;
+      for (const auto& kv : g_entries) {
+        if (clear_pinned || !kv.second.pinned) keys.push_back(kv.first);
+      }
+      paths.reserve(keys.size());
+      for (const auto& k : keys) {
+        auto it = g_entries.find(k);
+        if (it != g_entries.end()) {
+          paths.push_back(it->second.file_path);
+          g_total_cached_bytes =
+              std::max<int64_t>(0, g_total_cached_bytes - it->second.size_bytes);
+          g_entries.erase(it);
+        }
+      }
+      count = static_cast<int64_t>(keys.size());
+      PersistIndexLocked();
+    }
+    for (const auto& path : paths) {
+      std::remove(path.c_str());
+    }
+    PostMainResponse(self, response_handle, [response_handle, count]() {
+      xue_hua_cache_cache_host_api_respond_clear_all(response_handle, count);
+    });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandleListEntries(const gchar* tag,
+                       gboolean include_expired,
+                       XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                       gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  const std::optional<std::string> tag_opt =
+      tag ? std::optional<std::string>(tag) : std::nullopt;
+  const bool keep_expired = include_expired != FALSE;
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle, tag_opt,
+                                        keep_expired]() {
+    EnsureIndexLoaded();
+    const int64_t now = CurrentTimeMs();
     std::vector<LinuxCacheRecord> filtered;
-    for (const auto& kv : g_entries) {
-      if ((!has_tag || kv.second.tag == tag) &&
-          (include_expired || !kv.second.IsExpired(now))) {
-        filtered.push_back(kv.second);
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      for (const auto& kv : g_entries) {
+        if ((!tag_opt.has_value() || kv.second.tag == *tag_opt) &&
+            (keep_expired || !kv.second.IsExpired(now))) {
+          filtered.push_back(kv.second);
+        }
       }
     }
     std::sort(filtered.begin(), filtered.end(),
               [](const LinuxCacheRecord& a, const LinuxCacheRecord& b) {
                 return a.last_accessed_at_ms > b.last_accessed_at_ms;
               });
-    g_autoptr(FlValue) list = fl_value_new_list();
-    for (const auto& r : filtered) {
-      fl_value_append_take(list, r.ToFlValue());
+
+    PostMainResponse(
+        self, response_handle,
+        [response_handle, filtered = std::move(filtered)]() {
+          g_autoptr(FlValue) list = fl_value_new_list();
+          for (const auto& r : filtered) {
+            g_autoptr(XueHuaCacheWireCacheEntry) wire = r.ToWireEntry();
+            fl_value_append_take(
+                list, fl_value_new_custom_object(
+                          xue_hua_cache_wire_cache_entry_type_id,
+                          G_OBJECT(wire)));
+          }
+          xue_hua_cache_cache_host_api_respond_list_entries(response_handle,
+                                                            list);
+        });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  }
+}
+
+void HandleGetStats(XueHuaCacheCacheHostApiResponseHandle* response_handle,
+                    gpointer user_data) {
+  auto* self = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
+  g_object_ref(self);
+  g_object_ref(response_handle);
+
+  const bool queued = GetIoPool().Post([self, response_handle]() {
+    EnsureIndexLoaded();
+    int64_t cfg_max_bytes = 500LL * 1024LL * 1024LL;
+    {
+      std::lock_guard<std::mutex> lock(g_config_mutex);
+      cfg_max_bytes = g_max_disk_cache_bytes;
     }
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(list));
-  } else if (strcmp(method, "getStats") == 0) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    EnsureIndexLoadedLocked();
-    int64_t now = CurrentTimeMs();
+    const std::string cache_dir = GetCacheRootDir(true);
+    const int64_t now = CurrentTimeMs();
+
+    int64_t total_entries = 0;
     int64_t total_bytes = 0;
-    int expired_count = 0;
-    int pinned_count = 0;
+    int64_t expired_count = 0;
+    int64_t pinned_count = 0;
+    int64_t hits = 0;
+    int64_t misses = 0;
+    int64_t evictions = 0;
     std::map<std::string, int64_t> tag_sums;
 
-    for (const auto& kv : g_entries) {
-      total_bytes += kv.second.size_bytes;
-      if (kv.second.IsExpired(now)) expired_count++;
-      if (kv.second.pinned) pinned_count++;
-      std::string t = kv.second.tag.empty() ? "untagged" : kv.second.tag;
-      tag_sums[t] += kv.second.size_bytes;
+    {
+      std::lock_guard<std::mutex> lock(g_index_mutex);
+      for (const auto& kv : g_entries) {
+        total_bytes += kv.second.size_bytes;
+        if (kv.second.IsExpired(now)) expired_count++;
+        if (kv.second.pinned) pinned_count++;
+        const std::string t =
+            kv.second.tag.empty() ? "untagged" : kv.second.tag;
+        tag_sums[t] += kv.second.size_bytes;
+      }
+      g_total_cached_bytes = total_bytes;
+      total_entries = static_cast<int64_t>(g_entries.size());
+      hits = g_hit_count;
+      misses = g_miss_count;
+      evictions = g_eviction_count;
     }
 
-    FlValue* bytes_by_tag = fl_value_new_map();
-    for (const auto& tkv : tag_sums) {
-      fl_value_set_string_take(bytes_by_tag, tkv.first.c_str(),
-                               fl_value_new_int(tkv.second));
-    }
-
-    g_autoptr(FlValue) stats = fl_value_new_map();
-    fl_value_set_string_take(stats, "totalEntries",
-                             fl_value_new_int(g_entries.size()));
-    fl_value_set_string_take(stats, "totalBytes",
-                             fl_value_new_int(total_bytes));
-    fl_value_set_string_take(stats, "expiredEntries",
-                             fl_value_new_int(expired_count));
-    fl_value_set_string_take(stats, "pinnedEntries",
-                             fl_value_new_int(pinned_count));
-    fl_value_set_string_take(stats, "maxDiskCacheBytes",
-                             fl_value_new_int(g_max_disk_cache_bytes));
-    fl_value_set_string_take(stats, "cacheDirectoryPath",
-                             fl_value_new_string(GetCacheRootDir().c_str()));
-    fl_value_set_string_take(stats, "hitCount", fl_value_new_int(g_hit_count));
-    fl_value_set_string_take(stats, "missCount",
-                             fl_value_new_int(g_miss_count));
-    fl_value_set_string_take(stats, "evictionCount",
-                             fl_value_new_int(g_eviction_count));
-    fl_value_set_string_take(stats, "bytesByTag", bytes_by_tag);
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(stats));
-  } else if (strcmp(method, "getCapabilities") == 0) {
-    response = get_capabilities_response();
-  } else {
-    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+    PostMainResponse(
+        self, response_handle,
+        [response_handle, total_entries, total_bytes, expired_count,
+         pinned_count, cfg_max_bytes, cache_dir, hits, misses, evictions,
+         tag_sums = std::move(tag_sums)]() {
+          g_autoptr(FlValue) bytes_by_tag = fl_value_new_map();
+          for (const auto& tkv : tag_sums) {
+            fl_value_set_string_take(bytes_by_tag, tkv.first.c_str(),
+                                     fl_value_new_int(tkv.second));
+          }
+          g_autoptr(XueHuaCacheWireCacheStats) stats =
+              xue_hua_cache_wire_cache_stats_new(
+                  total_entries, total_bytes, expired_count, pinned_count,
+                  cfg_max_bytes, cache_dir.c_str(), hits, misses, evictions,
+                  bytes_by_tag);
+          xue_hua_cache_cache_host_api_respond_get_stats(response_handle,
+                                                         stats);
+        });
+    g_object_unref(response_handle);
+    g_object_unref(self);
+  });
+  if (!queued) {
+    g_object_unref(response_handle);
+    g_object_unref(self);
   }
-
-  fl_method_call_respond(method_call, response, nullptr);
 }
 
-static FlMethodErrorResponse* event_channel_listen_cb(FlEventChannel* channel,
-                                                      FlValue* args,
-                                                      gpointer user_data) {
-  XueHuaNaviteCacheManagerPlugin* plugin =
-      XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
-  plugin->is_listening = true;
-  return nullptr;
+XueHuaCacheCacheHostApiGetCapabilitiesResponse* HandleGetCapabilities(
+    gpointer /*user_data*/) {
+  return get_capabilities_response();
 }
 
-static FlMethodErrorResponse* event_channel_cancel_cb(FlEventChannel* channel,
-                                                      FlValue* args,
-                                                      gpointer user_data) {
-  XueHuaNaviteCacheManagerPlugin* plugin =
-      XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
-  plugin->is_listening = false;
-  return nullptr;
+const XueHuaCacheCacheHostApiVTable kCacheHostApiVTable = {
+    HandleConfigure,        HandleDownloadFile,    HandlePrefetchAll,
+    HandleCancelDownload,   HandleGetFileFromCache, HandleReadCacheBytes,
+    HandleContainsKey,      HandlePutBytes,        HandlePutFile,
+    HandleSetPinned,        HandleRemoveFile,      HandleRemoveByTag,
+    HandleRemoveExpired,    HandleTrimToSize,      HandleClearAll,
+    HandleListEntries,      HandleGetStats,        HandleGetCapabilities,
+};
+
+}  // namespace
+
+XueHuaCacheCacheHostApiGetCapabilitiesResponse* get_capabilities_response() {
+  const std::string default_root = GetCacheRootDir(false);
+  g_autoptr(XueHuaCacheWireCachePlatformCapabilities) caps =
+      xue_hua_cache_wire_cache_platform_capabilities_new(
+          "linux", TRUE, TRUE, TRUE, FALSE,
+          "XDG_CACHE_HOME (g_get_user_cache_dir) + GChecksum",
+          default_root.c_str());
+  return xue_hua_cache_cache_host_api_get_capabilities_response_new(caps);
+}
+
+XueHuaCacheCacheHostApiCancelDownloadResponse* cancel_download_response(
+    const gchar* key_or_url) {
+  const std::string target = key_or_url ? key_or_url : "";
+  const std::string sha_key = ComputeGLibHash(
+      reinterpret_cast<const uint8_t*>(target.data()), target.size(), "sha256");
+  bool canceled = false;
+  {
+    std::lock_guard<std::mutex> lock(g_flight_mutex);
+    auto it = g_in_flight.find(target);
+    if (it == g_in_flight.end()) {
+      it = g_in_flight.find(sha_key);
+    }
+    if (it != g_in_flight.end() && it->second && it->second->cancel_flag) {
+      it->second->cancel_flag->store(true);
+      canceled = true;
+    }
+  }
+  return xue_hua_cache_cache_host_api_cancel_download_response_new(
+      canceled ? TRUE : FALSE);
 }
 
 static void xue_hua_navite_cache_manager_plugin_dispose(GObject* object) {
   XueHuaNaviteCacheManagerPlugin* self =
       XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(object);
-  g_clear_object(&self->event_channel);
+  self->disposed.store(true, std::memory_order_release);
+  GetPersistCoordinator().FlushNow();
+  if (self->messenger) {
+    xue_hua_cache_cache_host_api_clear_method_handlers(self->messenger,
+                                                       nullptr);
+  }
+  g_clear_object(&self->flutter_api);
+  g_clear_object(&self->messenger);
   G_OBJECT_CLASS(xue_hua_navite_cache_manager_plugin_parent_class)
       ->dispose(object);
 }
@@ -1541,16 +2526,9 @@ static void xue_hua_navite_cache_manager_plugin_class_init(
 
 static void xue_hua_navite_cache_manager_plugin_init(
     XueHuaNaviteCacheManagerPlugin* self) {
-  self->event_channel = nullptr;
-  self->is_listening = false;
-}
-
-static void method_call_cb(FlMethodChannel* channel,
-                           FlMethodCall* method_call,
-                           gpointer user_data) {
-  XueHuaNaviteCacheManagerPlugin* plugin =
-      XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(user_data);
-  xue_hua_navite_cache_manager_plugin_handle_method_call(plugin, method_call);
+  self->messenger = nullptr;
+  self->flutter_api = nullptr;
+  self->disposed.store(false, std::memory_order_relaxed);
 }
 
 void xue_hua_navite_cache_manager_plugin_register_with_registrar(
@@ -1558,20 +2536,15 @@ void xue_hua_navite_cache_manager_plugin_register_with_registrar(
   XueHuaNaviteCacheManagerPlugin* plugin = XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN(
       g_object_new(xue_hua_navite_cache_manager_plugin_get_type(), nullptr));
 
-  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
-  g_autoptr(FlMethodChannel) channel =
-      fl_method_channel_new(fl_plugin_registrar_get_messenger(registrar),
-                            "xue_hua_navite_cache_manager",
-                            FL_METHOD_CODEC(codec));
-  fl_method_channel_set_method_call_handler(
-      channel, method_call_cb, g_object_ref(plugin), g_object_unref);
+  FlBinaryMessenger* messenger = fl_plugin_registrar_get_messenger(registrar);
+  plugin->messenger =
+      static_cast<FlBinaryMessenger*>(g_object_ref(messenger));
+  plugin->flutter_api =
+      xue_hua_cache_cache_progress_flutter_api_new(messenger, nullptr);
 
-  plugin->event_channel = fl_event_channel_new(
-      fl_plugin_registrar_get_messenger(registrar),
-      "xue_hua_navite_cache_manager/events", FL_METHOD_CODEC(codec));
-  fl_event_channel_set_stream_handlers(
-      plugin->event_channel, event_channel_listen_cb, event_channel_cancel_cb,
-      g_object_ref(plugin), g_object_unref);
+  xue_hua_cache_cache_host_api_set_method_handlers(
+      messenger, nullptr, &kCacheHostApiVTable, g_object_ref(plugin),
+      g_object_unref);
 
   g_object_unref(plugin);
 }

@@ -21,7 +21,7 @@ class CacheEntry {
     this.pinned = false,
   });
 
-  /// Deserializes a [CacheEntry] from a platform channel map.
+  /// Deserializes a [CacheEntry] from a serialized map.
   factory CacheEntry.fromMap(Map<Object?, Object?> map) {
     return CacheEntry(
       key: (map['key'] as String?) ?? '',

@@ -10,7 +10,7 @@
 
 - **零卡顿 `CachedNetworkImage` 与 `CachedNetworkImageProvider`**：
   - **Flutter `ImageCache` 内存同步直出**：命中 Flutter 内存位图缓存时（`wasSynchronouslyLoaded == true`）自动跳过淡入动画，0ms 同步渲染，彻底杜绝列表上下滑动时的闪烁。
-  - **Engine IO 线程零字节拷贝解码**：在原生端通过 `ui.ImmutableBuffer.fromFilePath` 直接在引擎 IO 线程读取磁盘缓存并硬件解码，避免将数 MB 的图片字节数组通过 `MethodChannel` 拷贝回 Dart UI 线程。
+  - **Engine IO 线程零字节拷贝解码**：在原生端通过 `ui.ImmutableBuffer.fromFilePath` 直接在引擎 IO 线程读取磁盘缓存并硬件解码，避免将数 MB 的图片字节数组通过 FFI/JNI/平台通道拷贝回 Dart UI 线程。
   - **C++ 解码器按尺寸降采样（`memCacheWidth` / `memCacheHeight`）**：支持在 C++ 解码阶段直接将 4K 大图降采样为目标缩略图尺寸，大幅降低 GPU 显存峰值与光栅化掉帧。
 - **支持 10,000+ 海量条目的高吞吐索引引擎**：
   - 默认 `maxEntries = 20000`，采用 `O(1)` 内存哈希表 + 实时累加字节计数器（`totalCachedBytes`）+ **600ms 防抖异步后台刷盘（Debounced Async Flush）** + **50ms 进度流节流**，无需引入笨重的 SQLite FFI 动态库即可在六端实现万级条目的微秒级命中与非阻塞持久化。
@@ -29,8 +29,8 @@
 
 | 平台 / 环境 | 最低版本要求 | 底层核心技术栈 |
 | :--- | :--- | :--- |
-| **Dart SDK** | `^3.13.0` | `plugin_platform_interface`, `web: ^1.0.0` |
-| **Flutter** | `>=3.47.0` | `MethodChannel`, `EventChannel`, `flutter_web_plugins` |
+| **Dart SDK** | `^3.13.0` | `ffi`, `jni`, `objective_c`, `web: ^1.1.2` |
+| **Flutter** | `>=3.47.0` | Pigeon Native Interop (FFI / JNI) + 桌面端 Platform Channels, `flutter_web_plugins` |
 | **Android** | API 24+ (Android 7.0+) | `HttpURLConnection`, `MessageDigest`, `Context.cacheDir` |
 | **iOS** | iOS 15.0+ | `URLSession`, `CryptoKit`, `FileManager (.cachesDirectory)` |
 | **macOS** | macOS 12.0+ | `URLSession`, `CryptoKit`, `FileManager (.cachesDirectory)` |
@@ -44,7 +44,7 @@
 
 ```yaml
 dependencies:
-  xue_hua_navite_cache_manager: ^1.2.0
+  xue_hua_navite_cache_manager: ^1.3.0
 ```
 
 ### Android 配置

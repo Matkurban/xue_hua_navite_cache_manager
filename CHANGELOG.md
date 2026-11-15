@@ -1,3 +1,11 @@
+## 1.3.0
+
+* Migrated native platform communication from manual `MethodChannel`/`EventChannel` + `plugin_platform_interface` to **Pigeon Native Interop**:
+  * **iOS & macOS (`ios/`, `macos/`)**: Independent Pigeon Swift FFI (`useFfi: true`) + `@FlutterApi` progress callbacks via `@async` listener bindings, eliminating `DispatchQueue.main.sync` deadlocks on `URLSession` creation and keeping `cancelDownload` lock-free from disk I/O.
+  * **Android (`android/`)**: Pigeon Kotlin JNI (`useJni: true`) with coroutine `suspend` host handlers and daemon progress dispatching.
+  * **Windows (`windows/`) & Linux (`linux/`)**: Pigeon C++ and GObject channel handlers generated from `pigeons/cache_messages.dart`, moving disk/index work onto bounded worker pools and dispatching progress events on platform threads.
+  * **Dart (`lib/`)**: Removed `plugin_platform_interface` and manual channel boilerplate, introducing an internal `CacheBackend` interface (`PigeonCacheBackend` on native platforms, `XueHuaNaviteCacheManagerWeb` on Web) while preserving 100% public Dart API compatibility.
+
 ## 1.2.0
 
 * Added high-performance `borderRadius` support (`BorderRadiusGeometry?`) to `CachedNetworkImage`. Rounded corners are rendered directly on the canvas via a custom leaf `RenderBox` (`ui.ImageShader` + `Canvas.drawRRect` single-pass GPU draw call with shader caching) without allocating heavyweight `ClipRRect` / `Container` widgets, `ClipRRectLayer` compositing layers, or `saveLayer` offscreen buffers during fade-in transitions.

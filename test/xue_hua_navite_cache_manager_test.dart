@@ -1,11 +1,11 @@
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:plugin_platform_interface/plugin_platform_interface.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:xue_hua_navite_cache_manager/src/cache_backend.dart';
 import 'package:xue_hua_navite_cache_manager/src/cache_hash_utils.dart';
+import 'package:xue_hua_navite_cache_manager/src/pigeon/cache_messages.g.dart';
+import 'package:xue_hua_navite_cache_manager/src/pigeon_cache_backend.dart';
 import 'package:xue_hua_navite_cache_manager/xue_hua_navite_cache_manager.dart';
-import 'package:xue_hua_navite_cache_manager/xue_hua_navite_cache_manager_method_channel.dart';
-import 'package:xue_hua_navite_cache_manager/xue_hua_navite_cache_manager_platform_interface.dart';
 
 /// 1x1 transparent PNG image bytes for testing [CachedNetworkImageProvider] and [CachedNetworkImage].
 final Uint8List kTransparentPngBytes = Uint8List.fromList(<int>[
@@ -78,9 +78,7 @@ final Uint8List kTransparentPngBytes = Uint8List.fromList(<int>[
   0x82,
 ]);
 
-class FullMockCachePlatform
-    with MockPlatformInterfaceMixin
-    implements XueHuaNaviteCacheManagerPlatform {
+class FullMockCacheBackend implements CacheBackend {
   CacheManagerConfig config = const CacheManagerConfig();
   final Map<String, CacheEntry> entries = <String, CacheEntry>{};
   final Map<String, Uint8List> bytesStore = <String, Uint8List>{};
@@ -494,7 +492,7 @@ class FullMockCachePlatform
   }
 }
 
-class _CountingDelayPlatform extends FullMockCachePlatform {
+class _CountingDelayBackend extends FullMockCacheBackend {
   int downloadCalls = 0;
 
   @override
@@ -505,22 +503,265 @@ class _CountingDelayPlatform extends FullMockCachePlatform {
   }
 }
 
-void main() {
-  final XueHuaNaviteCacheManagerPlatform initialPlatform =
-      XueHuaNaviteCacheManagerPlatform.instance;
+class _FakePigeonHostApi implements CacheHostApi {
+  WireCacheManagerConfig? lastConfig;
+  WireCacheRequest? lastRequest;
+  String? lastCanceled;
+  bool lastIncludePinned = true;
 
-  test('$MethodChannelXueHuaNaviteCacheManager is the default instance', () {
-    expect(
-      initialPlatform,
-      isInstanceOf<MethodChannelXueHuaNaviteCacheManager>(),
+  WireCacheEntry _sampleEntry({String key = 'pigeon_key'}) => WireCacheEntry(
+    key: key,
+    url: 'https://example.com/item.bin',
+    filePath: '/tmp/$key.bin',
+    sizeBytes: 128,
+    createdAtMs: 1000,
+    lastAccessedAtMs: 2000,
+    expiresAtMs: 9000,
+    hitCount: 3,
+    tag: 'wire_tag',
+    mimeType: 'application/octet-stream',
+    eTag: '"v1"',
+    lastModified: 'Mon, 01 Jan 2024 00:00:00 GMT',
+    checksum: 'abcd',
+    checksumAlgorithm: WireCacheChecksumAlgorithm.sha256,
+    pinned: true,
+  );
+
+  @override
+  // ignore: non_constant_identifier_names
+  BinaryMessenger? get pigeonVar_binaryMessenger => null;
+
+  @override
+  // ignore: non_constant_identifier_names
+  String get pigeonVar_messageChannelSuffix => '';
+
+  @override
+  Future<void> configure(WireCacheManagerConfig config) async {
+    lastConfig = config;
+  }
+
+  @override
+  Future<WireCacheFetchResult> downloadFile(WireCacheRequest request) async {
+    lastRequest = request;
+    return WireCacheFetchResult(
+      entry: _sampleEntry(key: request.customKey ?? 'dl_key'),
+      source: WireCacheResultSource.revalidated,
+      httpStatusCode: 304,
+      elapsedMs: 12,
     );
+  }
+
+  @override
+  Future<List<WireCacheEntry>> prefetchAll(
+    List<WireCacheRequest> requests,
+  ) async {
+    return requests
+        .map((r) => _sampleEntry(key: r.customKey ?? 'batch_key'))
+        .toList();
+  }
+
+  @override
+  Future<bool> cancelDownload(String keyOrUrl) async {
+    lastCanceled = keyOrUrl;
+    return true;
+  }
+
+  @override
+  Future<WireCacheEntry?> getFileFromCache(
+    String keyOrUrl,
+    bool ignoreExpired,
+  ) async {
+    return _sampleEntry(key: keyOrUrl);
+  }
+
+  @override
+  Future<Uint8List?> readCacheBytes(
+    String keyOrUrl,
+    bool ignoreExpired,
+  ) async {
+    return Uint8List.fromList(<int>[7, 8, 9]);
+  }
+
+  @override
+  Future<bool> containsKey(String keyOrUrl, bool ignoreExpired) async => true;
+
+  @override
+  Future<WireCacheEntry> putBytes(
+    String key,
+    Uint8List bytes,
+    String? url,
+    String? fileExtension,
+    String? mimeType,
+    String? tag,
+    int? ttlSeconds,
+    bool pinned,
+  ) async {
+    return _sampleEntry(key: key);
+  }
+
+  @override
+  Future<WireCacheEntry> putFile(
+    String key,
+    String sourceFilePath,
+    String? url,
+    String? fileExtension,
+    String? mimeType,
+    String? tag,
+    int? ttlSeconds,
+    bool pinned,
+  ) async {
+    return _sampleEntry(key: key);
+  }
+
+  @override
+  Future<bool> setPinned(String keyOrUrl, bool pinned) async => true;
+
+  @override
+  Future<bool> removeFile(String keyOrUrl) async => true;
+
+  @override
+  Future<int> removeByTag(String tag) async => 4;
+
+  @override
+  Future<int> removeExpired() async => 2;
+
+  @override
+  Future<int> trimToSize(int maxBytes) async => 5;
+
+  @override
+  Future<int> clearAll(bool includePinned) async {
+    lastIncludePinned = includePinned;
+    return 6;
+  }
+
+  @override
+  Future<List<WireCacheEntry>> listEntries(
+    String? tag,
+    bool includeExpired,
+  ) async {
+    return <WireCacheEntry>[_sampleEntry()];
+  }
+
+  @override
+  Future<WireCacheStats> getStats() async {
+    return WireCacheStats(
+      totalEntries: 10,
+      totalBytes: 2048,
+      expiredEntries: 1,
+      pinnedEntries: 2,
+      maxDiskCacheBytes: 4096,
+      cacheDirectoryPath: '/tmp/cache',
+      hitCount: 7,
+      missCount: 3,
+      evictionCount: 1,
+      bytesByTag: <String, int>{'wire_tag': 2048},
+    );
+  }
+
+  @override
+  Future<WireCachePlatformCapabilities> getCapabilities() async {
+    return WireCachePlatformCapabilities(
+      platformName: 'windows',
+      supportsFileSystemPaths: true,
+      supportsConditionalHttpRevalidation: true,
+      supportsNativeCryptoHash: true,
+      supportsLowDiskSpaceNotifications: false,
+      storageMechanism: 'Pigeon Host',
+      defaultCacheRootPath: 'C:/cache',
+    );
+  }
+}
+
+void main() {
+  final CacheBackend initialBackend = CacheBackend.instance;
+
+  test('PigeonCacheBackend is the default CacheBackend instance', () {
+    expect(initialBackend, isInstanceOf<PigeonCacheBackend>());
+  });
+
+  test('PigeonCacheBackend round-trips DTOs and progress events', () async {
+    final fakeHost = _FakePigeonHostApi();
+    final backend = PigeonCacheBackend(
+      hostApi: fakeHost,
+      registerFlutterApi: false,
+    );
+
+    await backend.configure(
+      const CacheManagerConfig(
+        maxDiskCacheBytes: 123456,
+        maxEntries: 500,
+        defaultTtlSeconds: 90,
+        evictionPolicy: CacheEvictionPolicy.fifo,
+        cacheSubdirectory: 'pigeon_dir',
+        maxConcurrentDownloads: 6,
+        connectTimeoutMs: 2500,
+        readTimeoutMs: 7500,
+        defaultHeaders: <String, String>{'X-Test': '1'},
+        respectHttpCacheHeaders: false,
+        autoTrimOnWrite: false,
+      ),
+    );
+    expect(fakeHost.lastConfig?.maxDiskCacheBytes, 123456);
+    expect(
+      fakeHost.lastConfig?.evictionPolicy,
+      WireCacheEvictionPolicy.fifo,
+    );
+    expect(fakeHost.lastConfig?.defaultHeaders['X-Test'], '1');
+
+    final fetchResult = await backend.downloadFile(
+      const CacheRequest(
+        url: 'https://example.com/item.bin',
+        customKey: 'custom_wire',
+        tag: 'wire_tag',
+        fileExtension: 'bin',
+        headers: <String, String>{'Accept': '*/*'},
+        ttlSeconds: 300,
+        forceRefresh: true,
+        fallbackToCacheOnError: false,
+        pinned: true,
+        checksumAlgorithm: CacheChecksumAlgorithm.md5,
+        expectedChecksum: 'deadbeef',
+      ),
+    );
+    expect(fakeHost.lastRequest?.checksumAlgorithm, WireCacheChecksumAlgorithm.md5);
+    expect(fetchResult.source, CacheResultSource.revalidated);
+    expect(fetchResult.httpStatusCode, 304);
+    expect(fetchResult.entry.key, 'custom_wire');
+    expect(fetchResult.entry.checksumAlgorithm, CacheChecksumAlgorithm.sha256);
+
+    final stats = await backend.getStats();
+    expect(stats.totalEntries, 10);
+    expect(stats.bytesByTag['wire_tag'], 2048);
+
+    final caps = await backend.getCapabilities();
+    expect(caps.platformName, 'windows');
+    expect(caps.storageMechanism, 'Pigeon Host');
+
+    expect(await backend.cancelDownload('custom_wire'), isTrue);
+    expect(fakeHost.lastCanceled, 'custom_wire');
+    expect(await backend.clearAll(includePinned: false), 6);
+    expect(fakeHost.lastIncludePinned, isFalse);
+
+    final progress = PigeonCacheBackend.fromWireProgressEvent(
+      WireCacheProgressEvent(
+        key: 'k1',
+        url: 'https://example.com/item.bin',
+        state: WireCacheTransferState.inProgress,
+        bytesReceived: 50,
+        totalBytes: 200,
+        filePath: null,
+        errorMessage: null,
+      ),
+    );
+    expect(progress.state, CacheTransferState.inProgress);
+    expect(progress.progress, closeTo(0.25, 0.0001));
   });
 
   test(
     'All XueHuaNaviteCacheManager APIs and models work end-to-end',
     () async {
-      final mock = FullMockCachePlatform();
-      XueHuaNaviteCacheManagerPlatform.instance = mock;
+      final mock = FullMockCacheBackend();
+      CacheBackend.instance = mock;
       final manager = XueHuaNaviteCacheManager.instance;
 
       // 1. Configure & copyWith
@@ -647,8 +888,8 @@ void main() {
   test(
     'High-volume 12,000+ cache entries stress and performance benchmark',
     () async {
-      final mock = FullMockCachePlatform();
-      XueHuaNaviteCacheManagerPlatform.instance = mock;
+      final mock = FullMockCacheBackend();
+      CacheBackend.instance = mock;
       final manager = XueHuaNaviteCacheManager.instance;
 
       await manager.configure(
@@ -717,8 +958,8 @@ void main() {
   testWidgets(
     'CachedNetworkImage and CachedNetworkImageProvider render image, borderRadius, custom imageBuilder (Container + DecorationImage), and errorBuilder cleanly',
     (WidgetTester tester) async {
-      final mock = FullMockCachePlatform();
-      XueHuaNaviteCacheManagerPlatform.instance = mock;
+      final mock = FullMockCacheBackend();
+      CacheBackend.instance = mock;
 
       const testImageUrl = 'https://example.com/avatar.png';
       const roundedImageUrl = 'https://example.com/rounded.png';
@@ -862,8 +1103,8 @@ void main() {
   test(
     'downloadFile coalesces concurrent requests that share a cache key',
     () async {
-      final mock = _CountingDelayPlatform();
-      XueHuaNaviteCacheManagerPlatform.instance = mock;
+      final mock = _CountingDelayBackend();
+      CacheBackend.instance = mock;
       final manager = XueHuaNaviteCacheManager.instance;
       const CacheRequest shared = CacheRequest(
         url: 'https://example.com/same.png',
@@ -902,22 +1143,28 @@ void main() {
     },
   );
 
-  test('CacheHashUtils computes standard RFC 1321 MD5 and FIPS 180-4 SHA-256 vectors', () {
-    final emptyBytes = Uint8List(0);
-    expect(
-      CacheHashUtils.md5Hex(emptyBytes),
-      'd41d8cd98f00b204e9800998ecf8427e',
-    );
-    expect(
-      CacheHashUtils.sha256Hex(emptyBytes),
-      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-    );
+  test(
+    'CacheHashUtils computes standard RFC 1321 MD5 and FIPS 180-4 SHA-256 vectors',
+    () {
+      final emptyBytes = Uint8List(0);
+      expect(
+        CacheHashUtils.md5Hex(emptyBytes),
+        'd41d8cd98f00b204e9800998ecf8427e',
+      );
+      expect(
+        CacheHashUtils.sha256Hex(emptyBytes),
+        'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      );
 
-    final abcBytes = Uint8List.fromList('abc'.codeUnits);
-    expect(CacheHashUtils.md5Hex(abcBytes), '900150983cd24fb0d6963f7d28e17f72');
-    expect(
-      CacheHashUtils.sha256Hex(abcBytes),
-      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
-    );
-  });
+      final abcBytes = Uint8List.fromList('abc'.codeUnits);
+      expect(
+        CacheHashUtils.md5Hex(abcBytes),
+        '900150983cd24fb0d6963f7d28e17f72',
+      );
+      expect(
+        CacheHashUtils.sha256Hex(abcBytes),
+        'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      );
+    },
+  );
 }

@@ -1,41 +1,29 @@
-#include <flutter/method_call.h>
-#include <flutter/method_result_functions.h>
-#include <flutter/standard_method_codec.h>
 #include <gtest/gtest.h>
 #include <windows.h>
 
-#include <memory>
 #include <string>
-#include <variant>
 
 #include "xue_hua_navite_cache_manager_plugin.h"
 
 namespace xue_hua_navite_cache_manager {
 namespace test {
 
-namespace {
-
-using flutter::EncodableMap;
-using flutter::EncodableValue;
-using flutter::MethodCall;
-using flutter::MethodResultFunctions;
-
-}  // namespace
-
 TEST(XueHuaNaviteCacheManagerPlugin, GetCapabilitiesReturnsWindows) {
   XueHuaNaviteCacheManagerPlugin plugin;
-  EncodableMap result_map;
-  plugin.HandleMethodCall(
-      MethodCall("getCapabilities", std::make_unique<EncodableValue>()),
-      std::make_unique<MethodResultFunctions<>>(
-          [&result_map](const EncodableValue* result) {
-            result_map = std::get<EncodableMap>(*result);
-          },
-          nullptr, nullptr));
+  ErrorOr<WireCachePlatformCapabilities> result = plugin.GetCapabilities();
+  ASSERT_FALSE(result.has_error());
+  EXPECT_EQ(result.value().platform_name(), "windows");
+  EXPECT_TRUE(result.value().supports_file_system_paths());
+  EXPECT_TRUE(result.value().supports_conditional_http_revalidation());
+  EXPECT_TRUE(result.value().supports_native_crypto_hash());
+  EXPECT_FALSE(result.value().supports_low_disk_space_notifications());
+}
 
-  auto it = result_map.find(EncodableValue("platformName"));
-  ASSERT_NE(it, result_map.end());
-  EXPECT_EQ(std::get<std::string>(it->second), "windows");
+TEST(XueHuaNaviteCacheManagerPlugin, CancelDownloadUnknownKeyReturnsFalse) {
+  XueHuaNaviteCacheManagerPlugin plugin;
+  ErrorOr<bool> result = plugin.CancelDownload("nonexistent-download-key");
+  ASSERT_FALSE(result.has_error());
+  EXPECT_FALSE(result.value());
 }
 
 }  // namespace test

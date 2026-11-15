@@ -13,7 +13,7 @@ import 'image_file_loader_stub.dart'
 ///
 /// Integrates directly with Flutter's [ImageCache] (`PaintingBinding.instance.imageCache`)
 /// for instant 0ms synchronous memory hits, uses zero-copy `ui.ImmutableBuffer.fromFilePath`
-/// decoding on native platforms to avoid copying large byte arrays across `MethodChannel`,
+/// decoding on native platforms to avoid copying large byte arrays across FFI/JNI/channels,
 /// and supports target-size downsampling ([maxWidth], [maxHeight]) to eliminate UI jank.
 @immutable
 class CachedNetworkImageProvider

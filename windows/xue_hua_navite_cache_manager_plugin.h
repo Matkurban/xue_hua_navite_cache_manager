@@ -1,12 +1,7 @@
 #ifndef FLUTTER_PLUGIN_XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN_H_
 #define FLUTTER_PLUGIN_XUE_HUA_NAVITE_CACHE_MANAGER_PLUGIN_H_
 
-#include <flutter/event_channel.h>
-#include <flutter/event_sink.h>
-#include <flutter/event_stream_handler_functions.h>
-#include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
-#include <flutter/standard_method_codec.h>
 
 #include <atomic>
 #include <chrono>
@@ -16,10 +11,13 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "messages.g.h"
 
 namespace xue_hua_navite_cache_manager {
 
@@ -44,43 +42,115 @@ struct CacheRecord {
     return expires_at_ms > 0 && now_ms > expires_at_ms;
   }
 
-  flutter::EncodableMap ToEncodableMap() const;
+  WireCacheEntry ToWireEntry() const;
 };
 
-class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin {
+class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin,
+                                       public CacheHostApi {
  public:
-  static void RegisterWithRegistrar(flutter::PluginRegistrarWindows *registrar);
+  static void RegisterWithRegistrar(flutter::PluginRegistrarWindows* registrar);
 
   // |registrar| may be null in unit tests. When non-null, platform-thread
   // delivery prefers PluginRegistrarWindows::PostPlatformThreadTask on SDKs
-  // that provide it.
+  // that provide it, or falls back to the message-only window dispatcher.
   explicit XueHuaNaviteCacheManagerPlugin(
       flutter::PluginRegistrarWindows* registrar = nullptr);
 
-  virtual ~XueHuaNaviteCacheManagerPlugin();
+  ~XueHuaNaviteCacheManagerPlugin() override;
 
   // Disallow copy and assign.
-  XueHuaNaviteCacheManagerPlugin(const XueHuaNaviteCacheManagerPlugin&) = delete;
-  XueHuaNaviteCacheManagerPlugin& operator=(const XueHuaNaviteCacheManagerPlugin&) = delete;
+  XueHuaNaviteCacheManagerPlugin(const XueHuaNaviteCacheManagerPlugin&) =
+      delete;
+  XueHuaNaviteCacheManagerPlugin& operator=(
+      const XueHuaNaviteCacheManagerPlugin&) = delete;
 
-  // Called when a method is called on this plugin's channel from Dart.
-  void HandleMethodCall(
-      const flutter::MethodCall<flutter::EncodableValue> &method_call,
-      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
-
-  void SetEventSink(std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> sink);
+  // CacheHostApi overrides:
+  void Configure(
+      const WireCacheManagerConfig& config,
+      std::function<void(std::optional<FlutterError> reply)> result) override;
+  void DownloadFile(
+      const WireCacheRequest& request,
+      std::function<void(ErrorOr<WireCacheFetchResult> reply)> result) override;
+  void PrefetchAll(
+      const ::flutter::EncodableList& requests,
+      std::function<void(ErrorOr<::flutter::EncodableList> reply)> result)
+      override;
+  ErrorOr<bool> CancelDownload(const std::string& key_or_url) override;
+  void GetFileFromCache(
+      const std::string& key_or_url,
+      bool ignore_expired,
+      std::function<void(ErrorOr<std::optional<WireCacheEntry>> reply)> result)
+      override;
+  void ReadCacheBytes(
+      const std::string& key_or_url,
+      bool ignore_expired,
+      std::function<void(ErrorOr<std::optional<std::vector<uint8_t>>> reply)>
+          result) override;
+  void ContainsKey(const std::string& key_or_url,
+                   bool ignore_expired,
+                   std::function<void(ErrorOr<bool> reply)> result) override;
+  void PutBytes(const std::string& key,
+                const std::vector<uint8_t>& bytes,
+                const std::string* url,
+                const std::string* file_extension,
+                const std::string* mime_type,
+                const std::string* tag,
+                const int64_t* ttl_seconds,
+                bool pinned,
+                std::function<void(ErrorOr<WireCacheEntry> reply)> result)
+      override;
+  void PutFile(const std::string& key,
+               const std::string& source_file_path,
+               const std::string* url,
+               const std::string* file_extension,
+               const std::string* mime_type,
+               const std::string* tag,
+               const int64_t* ttl_seconds,
+               bool pinned,
+               std::function<void(ErrorOr<WireCacheEntry> reply)> result)
+      override;
+  void SetPinned(const std::string& key_or_url,
+                 bool pinned,
+                 std::function<void(ErrorOr<bool> reply)> result) override;
+  void RemoveFile(const std::string& key_or_url,
+                  std::function<void(ErrorOr<bool> reply)> result) override;
+  void RemoveByTag(
+      const std::string& tag,
+      std::function<void(ErrorOr<int64_t> reply)> result) override;
+  void RemoveExpired(
+      std::function<void(ErrorOr<int64_t> reply)> result) override;
+  void TrimToSize(
+      int64_t max_bytes,
+      std::function<void(ErrorOr<int64_t> reply)> result) override;
+  void ClearAll(bool include_pinned,
+                std::function<void(ErrorOr<int64_t> reply)> result) override;
+  void ListEntries(
+      const std::string* tag,
+      bool include_expired,
+      std::function<void(ErrorOr<::flutter::EncodableList> reply)> result)
+      override;
+  void GetStats(
+      std::function<void(ErrorOr<WireCacheStats> reply)> result) override;
+  ErrorOr<WireCachePlatformCapabilities> GetCapabilities() override;
 
  private:
-  std::string GetCacheRootDir() const;
-  std::string GetIndexFilePath() const;
+  std::string ResolveCacheRootPath(const std::string& subdirectory) const;
+  std::string GetCacheRootDir(bool create_if_missing = true) const;
+  std::string GetIndexFilePath(const std::string& subdirectory = "") const;
   void EnsureIndexLoaded();
   void PersistIndexLocked();
-  std::string ResolveKey(const std::string& key_or_url, const std::string& custom_key = "");
+  std::string ResolveKey(const std::string& key_or_url,
+                         const std::string& custom_key = "");
+  std::string ResolveKeyLocked(const std::string& key_or_url,
+                               const std::string& custom_key = "") const;
   int RemoveExpiredLocked();
-  int EnforceQuotaLocked(int64_t target_max_bytes, const std::string& protected_key);
+  int EnforceQuotaLocked(int64_t target_max_bytes,
+                         int max_entries,
+                         const std::string& eviction_policy,
+                         const std::string& protected_key);
   void EmitProgress(const std::string& key,
                     const std::string& url,
-                    const std::string& state,
+                    WireCacheTransferState state,
                     int64_t bytes_received,
                     int64_t total_bytes,
                     const std::string& file_path = "",
@@ -88,7 +158,7 @@ class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin {
 
   struct DownloadOutcome {
     bool ok = false;
-    flutter::EncodableMap result;
+    std::optional<WireCacheFetchResult> result;
     std::string error_code;
     std::string error_msg;
   };
@@ -98,49 +168,50 @@ class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin {
     std::vector<std::function<void(const DownloadOutcome&)>> waiters;
   };
 
-  bool ExecuteDownloadLockedOrUnlocked(
-      const flutter::EncodableMap& args,
-      flutter::EncodableMap* out_result,
-      std::string* out_error_code,
-      std::string* out_error_msg,
+  DownloadOutcome ExecuteDownload(
+      const WireCacheRequest& request,
       const std::shared_ptr<std::atomic<bool>>& external_cancel);
 
-  // Assumes mutex_ is held. Fresh cache hits do not occupy a download slot.
+  // Assumes index_mutex_ is held. Fresh cache hits do not occupy a download slot.
   bool TryServeFreshCacheLocked(const std::string& key,
-                                const std::string& url,
                                 const std::string& tag,
                                 bool pinned,
                                 int64_t start_ms,
-                                flutter::EncodableMap* out_result);
+                                WireCacheFetchResult* out_result);
 
   void ScheduleDownload(
-      const flutter::EncodableMap& args,
+      const WireCacheRequest& request,
       const std::function<void(const DownloadOutcome&)>& callback);
   void FinishInFlight(const std::string& key,
                       const std::shared_ptr<InFlightDownload>& state,
                       const DownloadOutcome& outcome);
+
+  void EnsureIoWorkers(int workers);
+  void IoWorkerLoop();
+  void PostIoJob(std::function<void()> job);
+
   void EnsureDownloadWorkers(int workers);
   void DownloadWorkerLoop();
   void PostDownloadJob(std::function<void()> job);
 
   // Queues |task| on the Flutter platform thread. Never invokes |task| inline:
-  // callers such as EmitProgress may hold mutex_.
+  // callers such as EmitProgress may run while holding internal locks or on
+  // worker threads.
   void PostToPlatformThread(std::function<void()> task);
   void StartPlatformDispatcher();
   void StopPlatformDispatcher();
 
-  // Marks the index dirty and coalesces disk writes. Safe to call while
-  // mutex_ is held.
   void ScheduleIndexFlush();
   void IndexFlushLoop();
-  void FlushIndexSnapshot();
+  void FlushIndexSnapshot(const std::string& override_subdir = "");
 
   struct EventDispatchState;
-  // Copies event_state_. The shared_ptr member is read from download workers
-  // and the platform thread; the copy itself must be synchronized.
   std::shared_ptr<EventDispatchState> CopyEventState() const;
 
-  mutable std::mutex mutex_;
+  mutable std::mutex config_mutex_;
+  mutable std::mutex index_mutex_;
+  mutable std::mutex flight_mutex_;
+
   flutter::PluginRegistrarWindows* registrar_ = nullptr;
   mutable std::mutex event_state_mu_;
   std::shared_ptr<EventDispatchState> event_state_;
@@ -177,8 +248,15 @@ class XueHuaNaviteCacheManagerPlugin : public flutter::Plugin {
   std::map<std::string, std::shared_ptr<std::atomic<bool>>> active_cancels_;
   std::map<std::string, std::shared_ptr<InFlightDownload>> in_flight_;
 
-  // Bounded pool. Idle threads may stay at the high-water mark, but only
-  // max_concurrent_downloads_ jobs run at once.
+  // Bounded disk/index IO worker pool (separate from download workers).
+  std::mutex io_pool_mutex_;
+  std::condition_variable io_pool_cv_;
+  std::queue<std::function<void()>> io_jobs_;
+  std::vector<std::thread> io_workers_;
+  bool io_pool_stopping_ = false;
+
+  // Bounded download pool. Idle threads may stay at the high-water mark, but
+  // only max_concurrent_downloads_ jobs run at once.
   std::mutex pool_mutex_;
   std::condition_variable pool_cv_;
   std::queue<std::function<void()>> download_jobs_;

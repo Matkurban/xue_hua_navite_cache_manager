@@ -5,7 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/painting.dart';
 
 /// Loads an image file directly from [filePath] into an [ui.ImmutableBuffer]
-/// on the Engine IO thread without copying large byte arrays across MethodChannel.
+/// on the Engine IO thread without copying large byte arrays across FFI/JNI/channels.
 Future<ui.Codec> loadFileImageCodec(
   String filePath,
   ImageDecoderCallback decode, {

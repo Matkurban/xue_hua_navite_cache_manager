@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'src/cache_backend.dart';
 import 'src/cache_hash_utils.dart';
 import 'src/cache_models.dart';
-import 'xue_hua_navite_cache_manager_platform_interface.dart';
 
 export 'src/cache_models.dart';
 export 'src/widgets/cached_network_image.dart';
@@ -16,7 +16,7 @@ export 'src/widgets/cached_network_image_provider.dart';
 /// revalidation, configurable LRU/LFU/FIFO/TTL disk eviction, MD5/SHA-256 checksum
 /// verification, tag-based group invalidation, and real-time download progress streams.
 class XueHuaNaviteCacheManager {
-  /// Constructs a [XueHuaNaviteCacheManager] delegating to [XueHuaNaviteCacheManagerPlatform.instance].
+  /// Constructs a [XueHuaNaviteCacheManager] delegating to [CacheBackend.instance].
   XueHuaNaviteCacheManager();
 
   /// Shared singleton instance of [XueHuaNaviteCacheManager].
@@ -25,8 +25,7 @@ class XueHuaNaviteCacheManager {
   final Map<String, Future<CacheFetchResult>> _inFlightDownloads =
       <String, Future<CacheFetchResult>>{};
 
-  XueHuaNaviteCacheManagerPlatform get _platform =>
-      XueHuaNaviteCacheManagerPlatform.instance;
+  CacheBackend get _backend => CacheBackend.instance;
 
   /// Cache key shared by concurrent [downloadFile] calls.
   ///
@@ -41,7 +40,7 @@ class XueHuaNaviteCacheManager {
   }
 
   /// Broadcast stream of real-time download progress and cache lifecycle events.
-  Stream<CacheProgressEvent> get progressStream => _platform.progressStream;
+  Stream<CacheProgressEvent> get progressStream => _backend.progressStream;
 
   /// Returns a filtered stream of [CacheProgressEvent] matching a specific [keyOrUrl].
   Stream<CacheProgressEvent> watchProgress(String keyOrUrl) {
@@ -54,7 +53,7 @@ class XueHuaNaviteCacheManager {
   ///
   /// Call this once during application startup before issuing download requests.
   Future<void> configure(CacheManagerConfig config) {
-    return _platform.configure(config);
+    return _backend.configure(config);
   }
 
   /// Fetches a network file using [request] and returns a [CacheFetchResult] containing
@@ -72,7 +71,7 @@ class XueHuaNaviteCacheManager {
       return existing;
     }
     late final Future<CacheFetchResult> future;
-    future = _platform.downloadFile(request).whenComplete(() {
+    future = _backend.downloadFile(request).whenComplete(() {
       if (identical(_inFlightDownloads[key], future)) {
         _inFlightDownloads.remove(key);
       }
@@ -127,14 +126,14 @@ class XueHuaNaviteCacheManager {
     if (requests.isEmpty) {
       return Future<List<CacheEntry>>.value(const <CacheEntry>[]);
     }
-    return _platform.prefetchAll(requests);
+    return _backend.prefetchAll(requests);
   }
 
   /// Cancels an active in-flight network download by its [keyOrUrl].
   ///
   /// Returns `true` if an active download was found and canceled.
   Future<bool> cancelDownload(String keyOrUrl) {
-    return _platform.cancelDownload(keyOrUrl);
+    return _backend.cancelDownload(keyOrUrl);
   }
 
   /// Looks up a cached entry by [keyOrUrl] without making a network request.
@@ -145,7 +144,7 @@ class XueHuaNaviteCacheManager {
     String keyOrUrl, {
     bool ignoreExpired = true,
   }) {
-    return _platform.getFileFromCache(keyOrUrl, ignoreExpired: ignoreExpired);
+    return _backend.getFileFromCache(keyOrUrl, ignoreExpired: ignoreExpired);
   }
 
   /// Reads the raw binary [Uint8List] of a cached entry by [keyOrUrl], or fetches
@@ -154,12 +153,12 @@ class XueHuaNaviteCacheManager {
     String keyOrUrl, {
     bool ignoreExpired = true,
   }) {
-    return _platform.readCacheBytes(keyOrUrl, ignoreExpired: ignoreExpired);
+    return _backend.readCacheBytes(keyOrUrl, ignoreExpired: ignoreExpired);
   }
 
   /// Checks whether a valid cached entry currently exists for [keyOrUrl].
   Future<bool> containsKey(String keyOrUrl, {bool ignoreExpired = true}) {
-    return _platform.containsKey(keyOrUrl, ignoreExpired: ignoreExpired);
+    return _backend.containsKey(keyOrUrl, ignoreExpired: ignoreExpired);
   }
 
   /// Stores in-memory [bytes] directly into the cache under [key].
@@ -173,7 +172,7 @@ class XueHuaNaviteCacheManager {
     int? ttlSeconds,
     bool pinned = false,
   }) {
-    return _platform.putBytes(
+    return _backend.putBytes(
       key: key,
       bytes: bytes,
       url: url,
@@ -196,7 +195,7 @@ class XueHuaNaviteCacheManager {
     int? ttlSeconds,
     bool pinned = false,
   }) {
-    return _platform.putFile(
+    return _backend.putFile(
       key: key,
       sourceFilePath: sourceFilePath,
       url: url,
@@ -212,36 +211,36 @@ class XueHuaNaviteCacheManager {
   ///
   /// Pinned entries are skipped during automatic quota eviction (`LRU`, `LFU`, `FIFO`).
   Future<bool> setPinned(String keyOrUrl, {required bool pinned}) {
-    return _platform.setPinned(keyOrUrl, pinned: pinned);
+    return _backend.setPinned(keyOrUrl, pinned: pinned);
   }
 
   /// Removes a single cached file and its metadata entry by [keyOrUrl].
   Future<bool> removeFile(String keyOrUrl) {
-    return _platform.removeFile(keyOrUrl);
+    return _backend.removeFile(keyOrUrl);
   }
 
   /// Removes all cached entries assigned to [tag] and returns the number of removed files.
   Future<int> removeByTag(String tag) {
-    return _platform.removeByTag(tag);
+    return _backend.removeByTag(tag);
   }
 
   /// Purges all expired entries from the cache and returns the count of removed files.
   Future<int> removeExpired() {
-    return _platform.removeExpired();
+    return _backend.removeExpired();
   }
 
   /// Trims the cache using the configured eviction policy until total size is at or below [maxBytes].
   ///
   /// Returns the number of evicted entries.
   Future<int> trimToSize(int maxBytes) {
-    return _platform.trimToSize(maxBytes);
+    return _backend.trimToSize(maxBytes);
   }
 
   /// Clears all entries in the cache.
   ///
   /// Set [includePinned] to `false` to preserve pinned entries.
   Future<int> clearAll({bool includePinned = true}) {
-    return _platform.clearAll(includePinned: includePinned);
+    return _backend.clearAll(includePinned: includePinned);
   }
 
   /// Lists all entries currently tracked in the cache index.
@@ -249,16 +248,16 @@ class XueHuaNaviteCacheManager {
     String? tag,
     bool includeExpired = true,
   }) {
-    return _platform.listEntries(tag: tag, includeExpired: includeExpired);
+    return _backend.listEntries(tag: tag, includeExpired: includeExpired);
   }
 
   /// Retrieves live cache metrics including total bytes, hit/miss ratios, and per-tag breakdown.
   Future<CacheStats> getStats() {
-    return _platform.getStats();
+    return _backend.getStats();
   }
 
   /// Queries platform-specific caching capabilities and underlying storage details.
   Future<CachePlatformCapabilities> getCapabilities() {
-    return _platform.getCapabilities();
+    return _backend.getCapabilities();
   }
 }

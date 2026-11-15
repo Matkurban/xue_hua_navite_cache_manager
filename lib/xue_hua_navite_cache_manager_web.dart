@@ -6,20 +6,20 @@ import 'package:flutter/services.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:web/web.dart' as web;
 
+import 'src/cache_backend.dart';
 import 'src/cache_hash_utils.dart';
 import 'src/cache_models.dart';
-import 'xue_hua_navite_cache_manager_platform_interface.dart';
 
-/// Web implementation of [XueHuaNaviteCacheManagerPlatform] backed by the browser
+/// Web implementation of [CacheBackend] backed by the browser
 /// `CacheStorage` API (`window.caches`), debounced `localStorage` metadata index,
 /// `fetch()`, and `Blob` object URLs with O(1) running byte tracking for 10,000+ entries.
-class XueHuaNaviteCacheManagerWeb extends XueHuaNaviteCacheManagerPlatform {
+class XueHuaNaviteCacheManagerWeb implements CacheBackend {
   /// Constructs a [XueHuaNaviteCacheManagerWeb].
   XueHuaNaviteCacheManagerWeb();
 
-  /// Registers [XueHuaNaviteCacheManagerWeb] as the default platform instance.
+  /// Registers [XueHuaNaviteCacheManagerWeb] as the active [CacheBackend].
   static void registerWith(Registrar registrar) {
-    XueHuaNaviteCacheManagerPlatform.instance = XueHuaNaviteCacheManagerWeb();
+    CacheBackend.instance = XueHuaNaviteCacheManagerWeb();
   }
 
   final StreamController<CacheProgressEvent> _progressController =

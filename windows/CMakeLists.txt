@@ -18,6 +18,8 @@ set(PLUGIN_NAME "xue_hua_navite_cache_manager_plugin")
 
 # Any new source files that you add to the plugin should be added here.
 list(APPEND PLUGIN_SOURCES
+  "messages.g.cpp"
+  "messages.g.h"
   "xue_hua_navite_cache_manager_plugin.cpp"
   "xue_hua_navite_cache_manager_plugin.h"
 )
@@ -62,7 +64,7 @@ set(xue_hua_navite_cache_manager_bundled_libraries
 
 # Native googletest target disabled: long plugin name makes MSBuild .tlog paths
 # exceed Windows MAX_PATH under typical Flutter example/build trees. Dart unit
-# tests cover the MethodChannel API. googletest pin kept for easy re-enable.
+# tests cover the CacheBackend / Pigeon API. googletest pin kept for easy re-enable.
 # Only enable test builds when building the example (which sets this variable)
 # so that plugin clients aren't building the tests.
 # Disabled: `FALSE AND ${unset}` expands to `if(FALSE AND)` which CMake rejects.

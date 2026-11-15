@@ -10,7 +10,7 @@ A production-ready, cross-platform native network file cache manager and zero-ja
 
 - **Zero-Jank `CachedNetworkImage` & `CachedNetworkImageProvider`**:
   - **Synchronous `ImageCache` Short-Circuit**: Automatically skips fade animations when an image hits Flutter's in-memory `ImageCache` (`wasSynchronouslyLoaded`), preventing list/grid scroll flicker.
-  - **Zero-Copy Engine IO Decoding**: Loads cached files directly on the Flutter Engine IO thread via `ui.ImmutableBuffer.fromFilePath` without copying multi-megabyte `Uint8List` arrays across `MethodChannel`.
+  - **Zero-Copy Engine IO Decoding**: Loads cached files directly on the Flutter Engine IO thread via `ui.ImmutableBuffer.fromFilePath` without copying multi-megabyte `Uint8List` arrays across FFI/JNI/channels.
   - **C++ Codec Target-Size Downsampling**: Supports `memCacheWidth` and `memCacheHeight` (`maxWidth` / `maxHeight` on provider) so 4K photos are downsampled during C++ decoding before GPU texture upload.
 - **10,000+ Entries High-Throughput Index Engine**:
   - Defaults to `maxEntries = 20000` with `O(1)` running byte quota tracking (`totalCachedBytes`) and **600ms debounced asynchronous index flushing** so thousands of rapid cache hits/writes coalesce into a single non-blocking background disk write without SQLite FFI overhead.
@@ -31,8 +31,8 @@ A production-ready, cross-platform native network file cache manager and zero-ja
 
 | Platform | Minimum Version | Native APIs Used |
 | :--- | :--- | :--- |
-| **Dart SDK** | `^3.13.0` | `plugin_platform_interface`, `web: ^1.0.0` |
-| **Flutter** | `>=3.47.0` | `MethodChannel`, `EventChannel`, `flutter_web_plugins` |
+| **Dart SDK** | `^3.13.0` | `ffi`, `jni`, `objective_c`, `web: ^1.1.2` |
+| **Flutter** | `>=3.47.0` | Pigeon Native Interop (FFI / JNI) + Desktop Channels, `flutter_web_plugins` |
 | **Android** | API 24+ (Android 7.0+) | `HttpURLConnection`, `MessageDigest`, `Context.cacheDir` |
 | **iOS** | iOS 15.0+ | `URLSession`, `CryptoKit`, `FileManager (.cachesDirectory)` |
 | **macOS** | macOS 12.0+ | `URLSession`, `CryptoKit`, `FileManager (.cachesDirectory)` |
@@ -46,7 +46,7 @@ Add `xue_hua_navite_cache_manager` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  xue_hua_navite_cache_manager: ^1.2.0
+  xue_hua_navite_cache_manager: ^1.3.0
 ```
 
 ### Android

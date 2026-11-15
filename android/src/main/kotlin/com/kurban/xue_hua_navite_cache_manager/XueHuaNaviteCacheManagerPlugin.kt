@@ -1,14 +1,15 @@
 package com.kurban.xue_hua_navite_cache_manager
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
-import io.flutter.plugin.common.EventChannel
-import io.flutter.plugin.common.MethodCall
-import io.flutter.plugin.common.MethodChannel
-import io.flutter.plugin.common.MethodChannel.MethodCallHandler
-import io.flutter.plugin.common.MethodChannel.Result
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -20,6 +21,7 @@ import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.RejectedExecutionException
@@ -29,43 +31,41 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
- * Native Android implementation of `xue_hua_navite_cache_manager`.
+ * Native Android implementation of `xue_hua_navite_cache_manager` using Pigeon JNI.
  *
  * Provides thread-safe network file downloading, conditional HTTP revalidation (ETag / Last-Modified),
  * MD5 and SHA-256 verification, atomic disk persistence under `context.cacheDir`, O(1) running byte
- * tracking, debounced asynchronous index flushing for 10,000+ entries, and throttled progress events.
+ * tracking, debounced asynchronous index flushing for 10,000+ entries, and listener-safe progress events.
  * Network downloads run on a fixed pool capped by `maxConcurrentDownloads`. Identical in-flight keys
  * share one transfer and fan the result out to every waiter.
  */
 class XueHuaNaviteCacheManagerPlugin :
     FlutterPlugin,
-    MethodCallHandler,
-    EventChannel.StreamHandler {
+    CacheHostApi {
 
     private lateinit var applicationContext: Context
-    private lateinit var methodChannel: MethodChannel
-    private lateinit var eventChannel: EventChannel
+    private var pluginBinding: FlutterPlugin.FlutterPluginBinding? = null
 
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private var eventSink: EventChannel.EventSink? = null
     private val indexLock = Any()
-    private val executor = Executors.newCachedThreadPool()
     private val downloadExecutor = ThreadPoolExecutor(
         4,
         4,
         30L,
         TimeUnit.SECONDS,
         LinkedBlockingQueue<Runnable>(),
-        ThreadFactory { runnable ->
-            Thread(runnable, "xue-hua-cache-download").apply { isDaemon = true }
-        },
+        ThreadFactory { r -> Thread(r, "xuehua-cache-dl").apply { isDaemon = true } }
     )
     private val persistScheduler = Executors.newSingleThreadScheduledExecutor()
     private var pendingPersistFuture: ScheduledFuture<*>? = null
 
-    // Configuration fields
+    private var progressExecutor: ExecutorService = newProgressExecutor()
+    private var progressScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + progressExecutor.asCoroutineDispatcher())
+
     @Volatile
     private var maxDiskCacheBytes: Long = 500L * 1024L * 1024L
 
@@ -99,7 +99,6 @@ class XueHuaNaviteCacheManagerPlugin :
     @Volatile
     private var autoTrimOnWrite: Boolean = true
 
-    // Cache index and O(1) telemetry counters
     private val entries = LinkedHashMap<String, CacheRecord>(256, 0.75f, false)
     private var totalCachedBytes: Long = 0L
     private var hitCount: Long = 0L
@@ -107,11 +106,10 @@ class XueHuaNaviteCacheManagerPlugin :
     private var evictionCount: Long = 0L
     private var indexLoaded: Boolean = false
 
-    // Active download cancellation flags, including downloads still queued for a pool slot.
     private val activeDownloads = ConcurrentHashMap<String, AtomicBoolean>()
 
     private class InFlightDownload(
-        val future: CompletableFuture<Map<String, Any?>>,
+        val future: CompletableFuture<WireCacheFetchResult>,
         val cancelFlag: AtomicBoolean = AtomicBoolean(false),
     )
 
@@ -133,29 +131,29 @@ class XueHuaNaviteCacheManagerPlugin :
         var lastModified: String?,
         var checksum: String?,
         var checksumAlgorithm: String,
-        var pinned: Boolean
+        var pinned: Boolean,
     ) {
         fun isExpired(nowMs: Long = System.currentTimeMillis()): Boolean {
             return expiresAtMs > 0L && nowMs > expiresAtMs
         }
 
-        fun toMap(): Map<String, Any?> {
-            return mapOf(
-                "key" to key,
-                "url" to url,
-                "filePath" to filePath,
-                "sizeBytes" to sizeBytes,
-                "createdAtMs" to createdAtMs,
-                "lastAccessedAtMs" to lastAccessedAtMs,
-                "expiresAtMs" to expiresAtMs,
-                "hitCount" to hitCount,
-                "tag" to tag,
-                "mimeType" to mimeType,
-                "eTag" to eTag,
-                "lastModified" to lastModified,
-                "checksum" to checksum,
-                "checksumAlgorithm" to checksumAlgorithm,
-                "pinned" to pinned
+        fun toWire(): WireCacheEntry {
+            return WireCacheEntry(
+                key = key,
+                url = url,
+                filePath = filePath,
+                sizeBytes = sizeBytes,
+                createdAtMs = createdAtMs,
+                lastAccessedAtMs = lastAccessedAtMs,
+                expiresAtMs = expiresAtMs,
+                hitCount = hitCount,
+                tag = tag,
+                mimeType = mimeType,
+                eTag = eTag,
+                lastModified = lastModified,
+                checksum = checksum,
+                checksumAlgorithm = toWireChecksumAlgorithm(checksumAlgorithm),
+                pinned = pinned,
             )
         }
 
@@ -200,7 +198,7 @@ class XueHuaNaviteCacheManagerPlugin :
                     },
                     checksum = if (obj.has("checksum") && !obj.isNull("checksum")) obj.getString("checksum") else null,
                     checksumAlgorithm = obj.optString("checksumAlgorithm", "none"),
-                    pinned = obj.optBoolean("pinned", false)
+                    pinned = obj.optBoolean("pinned", false),
                 )
             }
         }
@@ -208,54 +206,49 @@ class XueHuaNaviteCacheManagerPlugin :
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         applicationContext = flutterPluginBinding.applicationContext
-        methodChannel = MethodChannel(
-            flutterPluginBinding.binaryMessenger,
-            "xue_hua_navite_cache_manager"
-        )
-        methodChannel.setMethodCallHandler(this)
-
-        eventChannel = EventChannel(
-            flutterPluginBinding.binaryMessenger,
-            "xue_hua_navite_cache_manager/events"
-        )
-        eventChannel.setStreamHandler(this)
+        pluginBinding = flutterPluginBinding
+        if (progressExecutor.isShutdown) {
+            progressExecutor = newProgressExecutor()
+            progressScope = CoroutineScope(SupervisorJob() + progressExecutor.asCoroutineDispatcher())
+        }
+        CacheHostApiRegistrar().register(this, flutterPluginBinding)
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        CacheHostApiRegistrar().unregister(this, binding)
+        pluginBinding = null
+        progressScope.cancel()
+        progressExecutor.shutdown()
         flushIndexNow()
         downloadExecutor.shutdownNow()
-        methodChannel.setMethodCallHandler(null)
-        eventChannel.setStreamHandler(null)
-    }
-
-    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-        eventSink = events
-    }
-
-    override fun onCancel(arguments: Any?) {
-        eventSink = null
     }
 
     private fun emitProgress(
         key: String,
         url: String,
-        state: String,
+        state: WireCacheTransferState,
         bytesReceived: Long,
         totalBytes: Long,
         filePath: String? = null,
-        errorMessage: String? = null
+        errorMessage: String? = null,
     ) {
-        val payload = mapOf<String, Any?>(
-            "key" to key,
-            "url" to url,
-            "state" to state,
-            "bytesReceived" to bytesReceived,
-            "totalBytes" to totalBytes,
-            "filePath" to filePath,
-            "errorMessage" to errorMessage
+        val binding = pluginBinding ?: return
+        val flutterApi = CacheProgressFlutterApiRegistrar().getInstance(binding) ?: return
+        val event = WireCacheProgressEvent(
+            key = key,
+            url = url,
+            state = state,
+            bytesReceived = bytesReceived,
+            totalBytes = totalBytes,
+            filePath = filePath,
+            errorMessage = errorMessage,
         )
-        mainHandler.post {
-            eventSink?.success(payload)
+        progressScope.launch {
+            try {
+                flutterApi.onProgress(event)
+            } catch (_: Throwable) {
+                // Ignore stale/detached Dart isolate callbacks per Pigeon FlutterApi guidance.
+            }
         }
     }
 
@@ -348,7 +341,7 @@ class XueHuaNaviteCacheManagerPlugin :
                 lastModified = null,
                 checksum = null,
                 checksumAlgorithm = "none",
-                pinned = false
+                pinned = false,
             )
             entries[key] = record
             totalCachedBytes += size
@@ -365,18 +358,18 @@ class XueHuaNaviteCacheManagerPlugin :
      */
     private fun schedulePersistIndexLocked(immediate: Boolean = false) {
         pendingPersistFuture?.cancel(false)
-        if (immediate) {
-            persistScheduler.execute { flushIndexNow() }
-        } else {
+        val delayMs = if (immediate) 0L else 120L
+        if (!persistScheduler.isShutdown) {
             pendingPersistFuture = persistScheduler.schedule(
                 { flushIndexNow() },
-                80L,
-                TimeUnit.MILLISECONDS
+                delayMs,
+                TimeUnit.MILLISECONDS,
             )
         }
     }
 
     private fun flushIndexNow() {
+        if (!::applicationContext.isInitialized) return
         val snapshotEntries: List<CacheRecord>
         val snapshotHit: Long
         val snapshotMiss: Long
@@ -472,66 +465,24 @@ class XueHuaNaviteCacheManagerPlugin :
         }
     }
 
-    override fun onMethodCall(call: MethodCall, result: Result) {
+    override suspend fun configure(config: WireCacheManagerConfig) = withContext(Dispatchers.IO) {
         ensureIndexLoaded()
-        when (call.method) {
-            "configure" -> handleConfigure(call, result)
-            "downloadFile" -> executor.execute { handleDownloadFile(call, result) }
-            "prefetchAll" -> executor.execute { handlePrefetchAll(call, result) }
-            "cancelDownload" -> handleCancelDownload(call, result)
-            "getFileFromCache" -> handleGetFileFromCache(call, result)
-            "readCacheBytes" -> executor.execute { handleReadCacheBytes(call, result) }
-            "containsKey" -> handleContainsKey(call, result)
-            "putBytes" -> executor.execute { handlePutBytes(call, result) }
-            "putFile" -> executor.execute { handlePutFile(call, result) }
-            "setPinned" -> handleSetPinned(call, result)
-            // Bulk disk deletes must not run on the platform/UI thread: after the
-            // 1k-entry bench, clearAll removed 1000+ files inline and froze the
-            // main looper long enough for flutter_driver to lose the VM service
-            // (SetFrameSync / Service connection disposed on Clear All / Health).
-            "removeFile" -> executor.execute { handleRemoveFile(call, result) }
-            "removeByTag" -> executor.execute { handleRemoveByTag(call, result) }
-            "removeExpired" -> executor.execute { handleRemoveExpired(result) }
-            "trimToSize" -> executor.execute { handleTrimToSize(call, result) }
-            "clearAll" -> executor.execute { handleClearAll(call, result) }
-            "listEntries" -> executor.execute { handleListEntries(call, result) }
-            "getStats" -> executor.execute { handleGetStats(result) }
-            "getCapabilities" -> handleGetCapabilities(result)
-            else -> result.notImplemented()
-        }
-    }
-
-    private fun handleConfigure(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
         val prevSubdir = cacheSubdirectory
-        maxDiskCacheBytes = (args["maxDiskCacheBytes"] as? Number)?.toLong() ?: maxDiskCacheBytes
-        maxEntries = (args["maxEntries"] as? Number)?.toInt() ?: maxEntries
-        defaultTtlSeconds = (args["defaultTtlSeconds"] as? Number)?.toLong() ?: defaultTtlSeconds
-        evictionPolicy = (args["evictionPolicy"] as? String) ?: evictionPolicy
+        maxDiskCacheBytes = config.maxDiskCacheBytes
+        maxEntries = config.maxEntries.toInt().coerceAtLeast(1)
+        defaultTtlSeconds = config.defaultTtlSeconds
+        evictionPolicy = fromWireEvictionPolicy(config.evictionPolicy)
         cacheSubdirectory =
-            (args["cacheSubdirectory"] as? String)?.takeIf { it.isNotBlank() } ?: cacheSubdirectory
-        val newConcurrency =
-            ((args["maxConcurrentDownloads"] as? Number)?.toInt() ?: maxConcurrentDownloads)
-                .coerceAtLeast(1)
+            config.cacheSubdirectory.takeIf { it.isNotBlank() } ?: cacheSubdirectory
+        val newConcurrency = config.maxConcurrentDownloads.toInt().coerceAtLeast(1)
         if (newConcurrency != maxConcurrentDownloads) {
             resizeDownloadPool(newConcurrency)
         }
-        connectTimeoutMs = (args["connectTimeoutMs"] as? Number)?.toInt() ?: connectTimeoutMs
-        readTimeoutMs = (args["readTimeoutMs"] as? Number)?.toInt() ?: readTimeoutMs
-        respectHttpCacheHeaders =
-            (args["respectHttpCacheHeaders"] as? Boolean) ?: respectHttpCacheHeaders
-        autoTrimOnWrite = (args["autoTrimOnWrite"] as? Boolean) ?: autoTrimOnWrite
-
-        val rawHeaders = args["defaultHeaders"] as? Map<*, *>
-        if (rawHeaders != null) {
-            val map = mutableMapOf<String, String>()
-            for ((k, v) in rawHeaders) {
-                if (k != null && v != null) {
-                    map[k.toString()] = v.toString()
-                }
-            }
-            defaultHeaders = map
-        }
+        connectTimeoutMs = config.connectTimeoutMs.toInt().coerceAtLeast(0)
+        readTimeoutMs = config.readTimeoutMs.toInt().coerceAtLeast(0)
+        defaultHeaders = HashMap(config.defaultHeaders)
+        respectHttpCacheHeaders = config.respectHttpCacheHeaders
+        autoTrimOnWrite = config.autoTrimOnWrite
 
         if (prevSubdir != cacheSubdirectory) {
             flushIndexNow()
@@ -547,7 +498,6 @@ class XueHuaNaviteCacheManagerPlugin :
                 schedulePersistIndexLocked()
             }
         }
-        result.success(null)
     }
 
     private fun resizeDownloadPool(newConcurrency: Int) {
@@ -559,17 +509,6 @@ class XueHuaNaviteCacheManagerPlugin :
         } else {
             downloadExecutor.corePoolSize = size
             downloadExecutor.maximumPoolSize = size
-        }
-    }
-
-    private fun deliverDownloadResult(result: Result, value: Map<String, Any?>?, error: Throwable?) {
-        val failure = unwrapDownloadError(error)
-        mainHandler.post {
-            when (failure) {
-                null -> result.success(value)
-                is CustomCacheException -> result.error(failure.code, failure.message, failure.details)
-                else -> result.error("DOWNLOAD_FAILED", failure.message ?: "Download failed", null)
-            }
         }
     }
 
@@ -585,18 +524,16 @@ class XueHuaNaviteCacheManagerPlugin :
      * Cache hits return immediately. Misses share one pooled download per key and complete
      * every waiter from that single transfer.
      */
-    private fun downloadCoalesced(args: Map<*, *>): CompletableFuture<Map<String, Any?>> {
-        val url = (args["url"] as? String)?.trim()
-        if (url.isNullOrEmpty()) {
-            val failed = CompletableFuture<Map<String, Any?>>()
-            failed.completeExceptionally(CustomCacheException("INVALID_URL", "URL is required"))
+    private fun downloadCoalesced(request: WireCacheRequest): CompletableFuture<WireCacheFetchResult> {
+        val url = request.url.trim()
+        if (url.isEmpty()) {
+            val failed = CompletableFuture<WireCacheFetchResult>()
+            failed.completeExceptionally(FlutterError("INVALID_URL", "URL is required", null))
             return failed
         }
-        val customKey = args["customKey"] as? String
-        val forceRefresh = (args["forceRefresh"] as? Boolean) ?: false
-        val key = resolveKey(url, customKey)
-        if (!forceRefresh) {
-            val cached = tryFreshCacheHit(args, key, url, System.currentTimeMillis())
+        val key = resolveKey(url, request.customKey)
+        if (!request.forceRefresh) {
+            val cached = tryFreshCacheHit(request, key, url, System.currentTimeMillis())
             if (cached != null) {
                 return CompletableFuture.completedFuture(cached)
             }
@@ -610,15 +547,15 @@ class XueHuaNaviteCacheManagerPlugin :
         activeDownloads[key] = created.cancelFlag
         try {
             downloadExecutor.execute {
-                var value: Map<String, Any?>? = null
-                var error: Exception? = null
+                var value: WireCacheFetchResult? = null
+                var error: Throwable? = null
                 try {
                     if (created.cancelFlag.get()) {
-                        throw CustomCacheException("CANCELED", "Download canceled for $key")
+                        throw FlutterError("CANCELED", "Download canceled for $key", null)
                     }
-                    value = executeDownloadRequest(args, created.cancelFlag)
-                } catch (e: Exception) {
-                    error = e
+                    value = executeDownloadRequest(request, created.cancelFlag)
+                } catch (t: Throwable) {
+                    error = t
                 } finally {
                     inFlightDownloads.remove(key, created)
                     activeDownloads.remove(key, created.cancelFlag)
@@ -629,7 +566,7 @@ class XueHuaNaviteCacheManagerPlugin :
                     created.future.complete(value)
                 } else {
                     created.future.completeExceptionally(
-                        CustomCacheException("DOWNLOAD_FAILED", "Download failed"),
+                        FlutterError("DOWNLOAD_FAILED", "Download failed", null),
                     )
                 }
             }
@@ -642,13 +579,13 @@ class XueHuaNaviteCacheManagerPlugin :
     }
 
     private fun tryFreshCacheHit(
-        args: Map<*, *>,
+        request: WireCacheRequest,
         key: String,
         url: String,
         startMs: Long,
-    ): Map<String, Any?>? {
-        val tag = args["tag"] as? String
-        val pinned = (args["pinned"] as? Boolean) ?: false
+    ): WireCacheFetchResult? {
+        val tag = request.tag
+        val pinned = request.pinned
         val hit = synchronized(indexLock) {
             val found = entries[key] ?: return@synchronized null
             if (!File(found.filePath).exists() || found.isExpired(startMs)) {
@@ -660,68 +597,75 @@ class XueHuaNaviteCacheManagerPlugin :
             if (pinned) found.pinned = true
             hitCount += 1L
             schedulePersistIndexLocked()
-            mapOf(
-                "entry" to found.toMap(),
-                "source" to "cacheHit",
-                "httpStatusCode" to null,
-                "elapsedMs" to (System.currentTimeMillis() - startMs),
-                "size" to found.sizeBytes,
-                "path" to found.filePath,
+            WireCacheFetchResult(
+                entry = found.toWire(),
+                source = WireCacheResultSource.CACHE_HIT,
+                httpStatusCode = null,
+                elapsedMs = System.currentTimeMillis() - startMs,
             )
         } ?: return null
+
         emitProgress(
-            key,
-            url,
-            "cacheHit",
-            hit["size"] as Long,
-            hit["size"] as Long,
-            hit["path"] as String,
+            key = key,
+            url = url,
+            state = WireCacheTransferState.CACHE_HIT,
+            bytesReceived = hit.entry!!.sizeBytes,
+            totalBytes = hit.entry!!.sizeBytes,
+            filePath = hit.entry!!.filePath,
         )
-        return mapOf(
-            "entry" to hit["entry"],
-            "source" to hit["source"],
-            "httpStatusCode" to hit["httpStatusCode"],
-            "elapsedMs" to hit["elapsedMs"],
-        )
+        return hit
     }
 
-    private fun handleDownloadFile(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        try {
-            downloadCoalesced(args).whenComplete { value, error ->
-                deliverDownloadResult(result, value, error)
-            }
-        } catch (e: Exception) {
-            deliverDownloadResult(result, null, e)
+    override suspend fun downloadFile(request: WireCacheRequest): WireCacheFetchResult =
+        withContext(Dispatchers.IO) {
+            ensureIndexLoaded()
+            downloadCoalesced(request).awaitResult()
         }
-    }
 
-    private class CustomCacheException(
-        val code: String,
-        override val message: String,
-        val details: Any? = null
-    ) : Exception(message)
+    private suspend fun CompletableFuture<WireCacheFetchResult>.awaitResult(): WireCacheFetchResult =
+        suspendCancellableCoroutine { continuation ->
+            whenComplete { value, error ->
+                if (!continuation.isActive) return@whenComplete
+                if (error != null) {
+                    val failure = unwrapDownloadError(error)
+                    when (failure) {
+                        is FlutterError -> continuation.resumeWithException(failure)
+                        else -> continuation.resumeWithException(
+                            FlutterError(
+                                "DOWNLOAD_FAILED",
+                                failure?.message ?: "Download failed",
+                                null,
+                            ),
+                        )
+                    }
+                } else if (value != null) {
+                    continuation.resume(value)
+                } else {
+                    continuation.resumeWithException(
+                        FlutterError("DOWNLOAD_FAILED", "Download failed", null),
+                    )
+                }
+            }
+        }
 
     private fun executeDownloadRequest(
-        args: Map<*, *>,
+        request: WireCacheRequest,
         externalCancel: AtomicBoolean? = null,
-    ): Map<String, Any?> {
+    ): WireCacheFetchResult {
         val startMs = System.currentTimeMillis()
-        val url = (args["url"] as? String)?.trim() ?: throw CustomCacheException(
-            "INVALID_URL",
-            "URL is required"
-        )
-        val customKey = args["customKey"] as? String
-        val tag = args["tag"] as? String
-        val fileExtension = args["fileExtension"] as? String
-        val ttlOverride = (args["ttlSeconds"] as? Number)?.toLong()
-        val forceRefresh = (args["forceRefresh"] as? Boolean) ?: false
-        val fallbackToCacheOnError = (args["fallbackToCacheOnError"] as? Boolean) ?: true
-        val pinned = (args["pinned"] as? Boolean) ?: false
-        val checksumAlgorithm = (args["checksumAlgorithm"] as? String) ?: "none"
-        val expectedChecksum = (args["expectedChecksum"] as? String)?.trim()?.lowercase()
+        val url = request.url.trim()
+        if (url.isEmpty()) {
+            throw FlutterError("INVALID_URL", "URL is required", null)
+        }
+        val tag = request.tag
+        val ttlOverride = request.ttlSeconds
+        val forceRefresh = request.forceRefresh
+        val fallbackToCacheOnError = request.fallbackToCacheOnError
+        val pinned = request.pinned
+        val checksumAlgorithm = fromWireChecksumAlgorithm(request.checksumAlgorithm)
+        val expectedChecksum = request.expectedChecksum?.trim()?.lowercase()
 
-        val key = resolveKey(url, customKey)
+        val key = resolveKey(url, request.customKey)
         var existingRecord: CacheRecord? = null
 
         synchronized(indexLock) {
@@ -735,19 +679,20 @@ class XueHuaNaviteCacheManagerPlugin :
                     if (pinned) found.pinned = true
                     hitCount += 1L
                     schedulePersistIndexLocked()
+                    val wireEntry = found.toWire()
                     emitProgress(
-                        key,
-                        url,
-                        "cacheHit",
-                        found.sizeBytes,
-                        found.sizeBytes,
-                        found.filePath
+                        key = key,
+                        url = url,
+                        state = WireCacheTransferState.CACHE_HIT,
+                        bytesReceived = found.sizeBytes,
+                        totalBytes = found.sizeBytes,
+                        filePath = found.filePath,
                     )
-                    return mapOf(
-                        "entry" to found.toMap(),
-                        "source" to "cacheHit",
-                        "httpStatusCode" to null,
-                        "elapsedMs" to (System.currentTimeMillis() - startMs)
+                    return WireCacheFetchResult(
+                        entry = wireEntry,
+                        source = WireCacheResultSource.CACHE_HIT,
+                        httpStatusCode = null,
+                        elapsedMs = System.currentTimeMillis() - startMs,
                     )
                 }
             }
@@ -759,12 +704,12 @@ class XueHuaNaviteCacheManagerPlugin :
         if (ownsCancel) {
             activeDownloads[key] = cancelFlag
         }
-        emitProgress(key, url, "started", 0L, -1L)
+        emitProgress(key, url, WireCacheTransferState.STARTED, 0L, -1L)
         if (cancelFlag.get()) {
             if (ownsCancel) {
                 activeDownloads.remove(key, cancelFlag)
             }
-            throw CustomCacheException("CANCELED", "Download canceled for $key")
+            throw FlutterError("CANCELED", "Download canceled for $key", null)
         }
 
         var tempFile: File? = null
@@ -779,13 +724,8 @@ class XueHuaNaviteCacheManagerPlugin :
             for ((k, v) in defaultHeaders) {
                 conn.setRequestProperty(k, v)
             }
-            val reqHeaders = args["headers"] as? Map<*, *>
-            if (reqHeaders != null) {
-                for ((k, v) in reqHeaders) {
-                    if (k != null && v != null) {
-                        conn.setRequestProperty(k.toString(), v.toString())
-                    }
-                }
+            for ((k, v) in request.headers) {
+                conn.setRequestProperty(k, v)
             }
 
             val existing = existingRecord
@@ -805,7 +745,7 @@ class XueHuaNaviteCacheManagerPlugin :
                 val now = System.currentTimeMillis()
                 val ttlSec = ttlOverride ?: parseMaxAgeSeconds(conn.getHeaderField("Cache-Control"))
                     ?: defaultTtlSeconds
-                synchronized(indexLock) {
+                val wireEntry = synchronized(indexLock) {
                     existing.lastAccessedAtMs = now
                     existing.expiresAtMs = now + ttlSec * 1000L
                     existing.hitCount += 1L
@@ -816,30 +756,31 @@ class XueHuaNaviteCacheManagerPlugin :
                     if (pinned) existing.pinned = true
                     entries[key] = existing
                     schedulePersistIndexLocked()
+                    existing.toWire()
                 }
                 emitProgress(
-                    key,
-                    url,
-                    "cacheHit",
-                    existing.sizeBytes,
-                    existing.sizeBytes,
-                    existing.filePath
+                    key = key,
+                    url = url,
+                    state = WireCacheTransferState.CACHE_HIT,
+                    bytesReceived = wireEntry.sizeBytes,
+                    totalBytes = wireEntry.sizeBytes,
+                    filePath = wireEntry.filePath,
                 )
-                return mapOf(
-                    "entry" to existing.toMap(),
-                    "source" to "revalidated",
-                    "httpStatusCode" to 304,
-                    "elapsedMs" to (System.currentTimeMillis() - startMs)
+                return WireCacheFetchResult(
+                    entry = wireEntry,
+                    source = WireCacheResultSource.REVALIDATED,
+                    httpStatusCode = 304L,
+                    elapsedMs = System.currentTimeMillis() - startMs,
                 )
             }
 
             if (statusCode !in 200..299) {
-                throw CustomCacheException("HTTP_ERROR", "HTTP $statusCode for $url", statusCode)
+                throw FlutterError("HTTP_ERROR", "HTTP $statusCode for $url", statusCode.toLong())
             }
 
             val totalBytes = conn.contentLengthLong
             val contentType = conn.contentType?.substringBefore(';')?.trim()
-            val resolvedExt = inferExtension(url, contentType, fileExtension)
+            val resolvedExt = inferExtension(url, contentType, request.fileExtension)
             val cacheDir = getCacheRootDir()
             val workingTempFile = File(cacheDir, "$key.${System.nanoTime()}.tmp")
             tempFile = workingTempFile
@@ -852,14 +793,20 @@ class XueHuaNaviteCacheManagerPlugin :
                     var read = input.read(buffer)
                     while (read != -1) {
                         if (cancelFlag.get()) {
-                            throw CustomCacheException("CANCELED", "Download canceled for $key")
+                            throw FlutterError("CANCELED", "Download canceled for $key", null)
                         }
                         output.write(buffer, 0, read)
                         bytesReceived += read
                         val nowMs = System.currentTimeMillis()
                         if (nowMs - lastProgressEmitMs >= 50L || bytesReceived == totalBytes) {
                             lastProgressEmitMs = nowMs
-                            emitProgress(key, url, "inProgress", bytesReceived, totalBytes)
+                            emitProgress(
+                                key,
+                                url,
+                                WireCacheTransferState.IN_PROGRESS,
+                                bytesReceived,
+                                totalBytes,
+                            )
                         }
                         read = input.read(buffer)
                     }
@@ -872,9 +819,10 @@ class XueHuaNaviteCacheManagerPlugin :
                 computedHash = computeFileHash(workingTempFile, checksumAlgorithm)
                 if (!expectedChecksum.isNullOrEmpty() && computedHash.lowercase() != expectedChecksum) {
                     workingTempFile.delete()
-                    throw CustomCacheException(
+                    throw FlutterError(
                         "CHECKSUM_MISMATCH",
-                        "Checksum mismatch: expected $expectedChecksum, got $computedHash"
+                        "Checksum mismatch: expected $expectedChecksum, got $computedHash",
+                        null,
                     )
                 }
             }
@@ -908,10 +856,10 @@ class XueHuaNaviteCacheManagerPlugin :
                 lastModified = conn.getHeaderField("Last-Modified"),
                 checksum = computedHash,
                 checksumAlgorithm = checksumAlgorithm,
-                pinned = pinned
+                pinned = pinned,
             )
 
-            synchronized(indexLock) {
+            val wireEntry = synchronized(indexLock) {
                 val old = entries[key]
                 if (old != null) {
                     totalCachedBytes -= old.sizeBytes
@@ -925,32 +873,39 @@ class XueHuaNaviteCacheManagerPlugin :
                     enforceQuotaLocked(maxDiskCacheBytes, key, checkOnlyFastPath = true)
                 }
                 schedulePersistIndexLocked(immediate = true)
+                record.toWire()
             }
 
-            emitProgress(key, url, "completed", record.sizeBytes, record.sizeBytes, record.filePath)
-            return mapOf(
-                "entry" to record.toMap(),
-                "source" to "networkDownload",
-                "httpStatusCode" to statusCode,
-                "elapsedMs" to (System.currentTimeMillis() - startMs)
+            emitProgress(
+                key = key,
+                url = url,
+                state = WireCacheTransferState.COMPLETED,
+                bytesReceived = wireEntry.sizeBytes,
+                totalBytes = wireEntry.sizeBytes,
+                filePath = wireEntry.filePath,
             )
-        } catch (e: Exception) {
+            return WireCacheFetchResult(
+                entry = wireEntry,
+                source = WireCacheResultSource.NETWORK_DOWNLOAD,
+                httpStatusCode = statusCode.toLong(),
+                elapsedMs = System.currentTimeMillis() - startMs,
+            )
+        } catch (t: Throwable) {
             tempFile?.delete()
             val existing = existingRecord
-            if (fallbackToCacheOnError && existing != null && File(existing.filePath).exists() &&
-                (e !is CustomCacheException || e.code != "CANCELED")
-            ) {
-                return mapOf(
-                    "entry" to existing.toMap(),
-                    "source" to "staleCacheFallback",
-                    "httpStatusCode" to null,
-                    "elapsedMs" to (System.currentTimeMillis() - startMs)
+            val isCanceled = t is FlutterError && t.code == "CANCELED"
+            if (fallbackToCacheOnError && existing != null && File(existing.filePath).exists() && !isCanceled) {
+                return WireCacheFetchResult(
+                    entry = existing.toWire(),
+                    source = WireCacheResultSource.STALE_CACHE_FALLBACK,
+                    httpStatusCode = null,
+                    elapsedMs = System.currentTimeMillis() - startMs,
                 )
             }
-            val state =
-                if (e is CustomCacheException && e.code == "CANCELED") "canceled" else "failed"
-            emitProgress(key, url, state, 0L, -1L, null, e.message)
-            throw e
+            val state = if (isCanceled) WireCacheTransferState.CANCELED else WireCacheTransferState.FAILED
+            emitProgress(key, url, state, 0L, -1L, null, t.message)
+            if (t is FlutterError) throw t
+            throw FlutterError("DOWNLOAD_FAILED", t.message ?: "Download failed", null)
         } finally {
             if (ownsCancel) {
                 activeDownloads.remove(key, cancelFlag)
@@ -968,59 +923,51 @@ class XueHuaNaviteCacheManagerPlugin :
         }
     }
 
-    private fun handlePrefetchAll(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val reqList = args["requests"] as? List<*> ?: emptyList<Any>()
-        val futures = mutableListOf<CompletableFuture<Map<String, Any?>>>()
-        for (item in reqList) {
-            val map = item as? Map<*, *> ?: continue
-            futures.add(downloadCoalesced(map))
-        }
-        if (futures.isEmpty()) {
-            mainHandler.post { result.success(emptyList<Any>()) }
-            return
-        }
-        CompletableFuture.allOf(*futures.toTypedArray()).whenComplete { _, _ ->
-            val out = mutableListOf<Map<*, *>>()
+    override suspend fun prefetchAll(requests: List<WireCacheRequest>): List<WireCacheEntry> =
+        withContext(Dispatchers.IO) {
+            ensureIndexLoaded()
+            if (requests.isEmpty()) {
+                return@withContext emptyList()
+            }
+            val futures = requests.map { downloadCoalesced(it) }
+            val out = mutableListOf<WireCacheEntry>()
             for (future in futures) {
                 try {
-                    val res = future.getNow(null) ?: continue
-                    val entryMap = res["entry"] as? Map<*, *>
-                    if (entryMap != null) {
-                        out.add(entryMap)
-                    }
-                } catch (_: Exception) {
+                    out.add(future.awaitResult().entry!!)
+                } catch (_: Throwable) {
                 }
             }
-            mainHandler.post { result.success(out) }
+            out
         }
+
+    override fun cancelDownload(keyOrUrl: String): Boolean {
+        // Lock-free lookup against active downloads so cancellation never stalls behind disk I/O.
+        val directFlag = activeDownloads[keyOrUrl]
+        if (directFlag != null) {
+            directFlag.set(true)
+            return true
+        }
+        val shaKey = computeSha256String(keyOrUrl.toByteArray(Charsets.UTF_8))
+        val shaFlag = activeDownloads[shaKey]
+        if (shaFlag != null) {
+            shaFlag.set(true)
+            return true
+        }
+        return false
     }
 
-    private fun handleCancelDownload(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val keyOrUrl = (args["keyOrUrl"] as? String) ?: ""
-        val key = resolveKey(keyOrUrl)
-        val flag = activeDownloads[key] ?: activeDownloads[keyOrUrl]
-        if (flag != null) {
-            flag.set(true)
-            result.success(true)
-        } else {
-            result.success(false)
-        }
-    }
-
-    private fun handleGetFileFromCache(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val keyOrUrl = (args["keyOrUrl"] as? String) ?: ""
-        val ignoreExpired = (args["ignoreExpired"] as? Boolean) ?: true
+    override suspend fun getFileFromCache(
+        keyOrUrl: String,
+        ignoreExpired: Boolean,
+    ): WireCacheEntry? = withContext(Dispatchers.IO) {
+        ensureIndexLoaded()
         val key = resolveKey(keyOrUrl)
 
-        synchronized(indexLock) {
+        val resultEntry = synchronized(indexLock) {
             val record = entries[key]
             if (record == null) {
                 missCount += 1L
-                result.success(null)
-                return
+                return@synchronized null
             }
             val file = File(record.filePath)
             if (!file.exists()) {
@@ -1028,38 +975,38 @@ class XueHuaNaviteCacheManagerPlugin :
                 totalCachedBytes = (totalCachedBytes - record.sizeBytes).coerceAtLeast(0L)
                 missCount += 1L
                 schedulePersistIndexLocked()
-                result.success(null)
-                return
+                return@synchronized null
             }
             if (ignoreExpired && record.isExpired()) {
                 missCount += 1L
-                result.success(null)
-                return
+                return@synchronized null
             }
             record.lastAccessedAtMs = System.currentTimeMillis()
             record.hitCount += 1L
             hitCount += 1L
             schedulePersistIndexLocked()
-            emitProgress(
-                key,
-                record.url,
-                "cacheHit",
-                record.sizeBytes,
-                record.sizeBytes,
-                record.filePath
-            )
-            result.success(record.toMap())
-        }
+            record.toWire()
+        } ?: return@withContext null
+
+        emitProgress(
+            key = key,
+            url = resultEntry.url,
+            state = WireCacheTransferState.CACHE_HIT,
+            bytesReceived = resultEntry.sizeBytes,
+            totalBytes = resultEntry.sizeBytes,
+            filePath = resultEntry.filePath,
+        )
+        resultEntry
     }
 
-    private fun handleReadCacheBytes(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val keyOrUrl = (args["keyOrUrl"] as? String) ?: ""
-        val ignoreExpired = (args["ignoreExpired"] as? Boolean) ?: true
+    override suspend fun readCacheBytes(
+        keyOrUrl: String,
+        ignoreExpired: Boolean,
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        ensureIndexLoaded()
         val key = resolveKey(keyOrUrl)
 
-        var resolvedFilePath: String? = null
-        synchronized(indexLock) {
+        val targetPath = synchronized(indexLock) {
             val record = entries[key]
             if (record != null && (!ignoreExpired || !record.isExpired())) {
                 val file = File(record.filePath)
@@ -1068,273 +1015,282 @@ class XueHuaNaviteCacheManagerPlugin :
                     record.hitCount += 1L
                     hitCount += 1L
                     schedulePersistIndexLocked()
-                    resolvedFilePath = record.filePath
+                    record.filePath
+                } else {
+                    missCount += 1L
+                    null
                 }
             } else {
                 missCount += 1L
+                null
             }
-        }
+        } ?: return@withContext null
 
-        val targetPath = resolvedFilePath
-        if (targetPath == null) {
-            mainHandler.post { result.success(null) }
-            return
-        }
         try {
-            val bytes = File(targetPath).readBytes()
-            mainHandler.post { result.success(bytes) }
+            File(targetPath).readBytes()
         } catch (_: Exception) {
-            mainHandler.post { result.success(null) }
+            null
         }
     }
 
-    private fun handleContainsKey(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val keyOrUrl = (args["keyOrUrl"] as? String) ?: ""
-        val ignoreExpired = (args["ignoreExpired"] as? Boolean) ?: true
-        val key = resolveKey(keyOrUrl)
+    override suspend fun containsKey(keyOrUrl: String, ignoreExpired: Boolean): Boolean =
+        withContext(Dispatchers.IO) {
+            ensureIndexLoaded()
+            val key = resolveKey(keyOrUrl)
 
-        synchronized(indexLock) {
-            val record = entries[key]
-            if (record == null || !File(record.filePath).exists()) {
-                result.success(false)
-                return
+            synchronized(indexLock) {
+                val record = entries[key] ?: return@synchronized false
+                if (!File(record.filePath).exists()) {
+                    return@synchronized false
+                }
+                if (ignoreExpired && record.isExpired()) {
+                    return@synchronized false
+                }
+                true
             }
-            if (ignoreExpired && record.isExpired()) {
-                result.success(false)
-                return
-            }
-            result.success(true)
         }
-    }
 
-    private fun handlePutBytes(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val key = (args["key"] as? String)?.trim() ?: ""
-        val bytes = args["bytes"] as? ByteArray
-        if (key.isEmpty() || bytes == null) {
-            mainHandler.post { result.error("INVALID_ARGS", "key and bytes are required", null) }
-            return
+    override suspend fun putBytes(
+        key: String,
+        bytes: ByteArray,
+        url: String?,
+        fileExtension: String?,
+        mimeType: String?,
+        tag: String?,
+        ttlSeconds: Long?,
+        pinned: Boolean,
+    ): WireCacheEntry = withContext(Dispatchers.IO) {
+        ensureIndexLoaded()
+        val cleanKey = key.trim()
+        if (cleanKey.isEmpty()) {
+            throw FlutterError("INVALID_ARGS", "key and bytes are required", null)
         }
-        val url = (args["url"] as? String) ?: "local://$key"
-        val fileExtension = args["fileExtension"] as? String
-        val mimeType = (args["mimeType"] as? String) ?: "application/octet-stream"
-        val tag = args["tag"] as? String
-        val ttlSeconds = (args["ttlSeconds"] as? Number)?.toLong() ?: defaultTtlSeconds
-        val pinned = (args["pinned"] as? Boolean) ?: false
+        val effectiveUrl = url ?: "local://$cleanKey"
+        val effectiveMime = mimeType ?: "application/octet-stream"
+        val effectiveTtl = ttlSeconds ?: defaultTtlSeconds
 
         try {
-            val ext = inferExtension(url, mimeType, fileExtension)
-            val destFile = File(getCacheRootDir(), "$key.$ext")
+            val ext = inferExtension(effectiveUrl, effectiveMime, fileExtension)
+            val destFile = File(getCacheRootDir(), "$cleanKey.$ext")
             destFile.writeBytes(bytes)
             val checksum = computeSha256String(bytes)
             val now = System.currentTimeMillis()
 
             val record = CacheRecord(
-                key = key,
-                url = url,
+                key = cleanKey,
+                url = effectiveUrl,
                 filePath = destFile.absolutePath,
                 sizeBytes = bytes.size.toLong(),
                 createdAtMs = now,
                 lastAccessedAtMs = now,
-                expiresAtMs = now + ttlSeconds * 1000L,
+                expiresAtMs = now + effectiveTtl * 1000L,
                 hitCount = 1L,
                 tag = tag,
-                mimeType = mimeType,
+                mimeType = effectiveMime,
                 eTag = null,
                 lastModified = null,
                 checksum = checksum,
                 checksumAlgorithm = "sha256",
-                pinned = pinned
+                pinned = pinned,
             )
             synchronized(indexLock) {
-                val previous = entries[key]
+                val previous = entries[cleanKey]
                 if (previous != null) {
                     totalCachedBytes -= previous.sizeBytes
                 }
-                entries[key] = record
+                entries[cleanKey] = record
                 totalCachedBytes += record.sizeBytes
                 if (autoTrimOnWrite) {
-                    enforceQuotaLocked(maxDiskCacheBytes, key, checkOnlyFastPath = true)
+                    enforceQuotaLocked(maxDiskCacheBytes, cleanKey, checkOnlyFastPath = true)
                 }
                 schedulePersistIndexLocked()
+                record.toWire()
             }
-            mainHandler.post { result.success(record.toMap()) }
+        } catch (e: FlutterError) {
+            throw e
         } catch (e: Exception) {
-            mainHandler.post { result.error("PUT_BYTES_FAILED", e.message, null) }
+            throw FlutterError("PUT_BYTES_FAILED", e.message, null)
         }
     }
 
-    private fun handlePutFile(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val key = (args["key"] as? String)?.trim() ?: ""
-        val sourceFilePath = (args["sourceFilePath"] as? String)?.trim() ?: ""
-        val sourceFile = File(sourceFilePath)
-        if (key.isEmpty() || !sourceFile.exists()) {
-            mainHandler.post {
-                result.error(
-                    "INVALID_SOURCE",
-                    "Source file does not exist: $sourceFilePath",
-                    null
-                )
-            }
-            return
+    override suspend fun putFile(
+        key: String,
+        sourceFilePath: String,
+        url: String?,
+        fileExtension: String?,
+        mimeType: String?,
+        tag: String?,
+        ttlSeconds: Long?,
+        pinned: Boolean,
+    ): WireCacheEntry = withContext(Dispatchers.IO) {
+        ensureIndexLoaded()
+        val cleanKey = key.trim()
+        val cleanSource = sourceFilePath.trim()
+        val sourceFile = File(cleanSource)
+        if (cleanKey.isEmpty() || !sourceFile.exists()) {
+            throw FlutterError("INVALID_SOURCE", "Source file does not exist: $cleanSource", null)
         }
-        val url = (args["url"] as? String) ?: "file://$sourceFilePath"
-        val fileExtension =
-            args["fileExtension"] as? String ?: sourceFile.extension.takeIf { it.isNotEmpty() }
-        val mimeType = (args["mimeType"] as? String) ?: "application/octet-stream"
-        val tag = args["tag"] as? String
-        val ttlSeconds = (args["ttlSeconds"] as? Number)?.toLong() ?: defaultTtlSeconds
-        val pinned = (args["pinned"] as? Boolean) ?: false
+        val effectiveUrl = url ?: "file://$cleanSource"
+        val effectiveExt = fileExtension ?: sourceFile.extension.takeIf { it.isNotEmpty() }
+        val effectiveMime = mimeType ?: "application/octet-stream"
+        val effectiveTtl = ttlSeconds ?: defaultTtlSeconds
 
         try {
-            val ext = inferExtension(url, mimeType, fileExtension)
-            val destFile = File(getCacheRootDir(), "$key.$ext")
+            val ext = inferExtension(effectiveUrl, effectiveMime, effectiveExt)
+            val destFile = File(getCacheRootDir(), "$cleanKey.$ext")
             sourceFile.copyTo(destFile, overwrite = true)
             val checksum = computeFileHash(destFile, "sha256")
             val now = System.currentTimeMillis()
 
             val record = CacheRecord(
-                key = key,
-                url = url,
+                key = cleanKey,
+                url = effectiveUrl,
                 filePath = destFile.absolutePath,
                 sizeBytes = destFile.length(),
                 createdAtMs = now,
                 lastAccessedAtMs = now,
-                expiresAtMs = now + ttlSeconds * 1000L,
+                expiresAtMs = now + effectiveTtl * 1000L,
                 hitCount = 1L,
                 tag = tag,
-                mimeType = mimeType,
+                mimeType = effectiveMime,
                 eTag = null,
                 lastModified = null,
                 checksum = checksum,
                 checksumAlgorithm = "sha256",
-                pinned = pinned
+                pinned = pinned,
             )
             synchronized(indexLock) {
-                val previous = entries[key]
+                val previous = entries[cleanKey]
                 if (previous != null) {
                     totalCachedBytes -= previous.sizeBytes
                 }
-                entries[key] = record
+                entries[cleanKey] = record
                 totalCachedBytes += record.sizeBytes
                 if (autoTrimOnWrite) {
-                    enforceQuotaLocked(maxDiskCacheBytes, key, checkOnlyFastPath = true)
+                    enforceQuotaLocked(maxDiskCacheBytes, cleanKey, checkOnlyFastPath = true)
                 }
                 schedulePersistIndexLocked()
+                record.toWire()
             }
-            mainHandler.post { result.success(record.toMap()) }
+        } catch (e: FlutterError) {
+            throw e
         } catch (e: Exception) {
-            mainHandler.post { result.error("PUT_FILE_FAILED", e.message, null) }
+            throw FlutterError("PUT_FILE_FAILED", e.message, null)
         }
     }
 
-    private fun handleSetPinned(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val keyOrUrl = (args["keyOrUrl"] as? String) ?: ""
-        val pinned = (args["pinned"] as? Boolean) ?: false
-        val key = resolveKey(keyOrUrl)
+    override suspend fun setPinned(keyOrUrl: String, pinned: Boolean): Boolean =
+        withContext(Dispatchers.IO) {
+            ensureIndexLoaded()
+            val key = resolveKey(keyOrUrl)
 
-        synchronized(indexLock) {
-            val record = entries[key]
-            if (record == null) {
-                result.success(false)
-                return
-            }
-            record.pinned = pinned
-            schedulePersistIndexLocked()
-            result.success(true)
-        }
-    }
-
-    private fun handleRemoveFile(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val keyOrUrl = (args["keyOrUrl"] as? String) ?: ""
-        val key = resolveKey(keyOrUrl)
-
-        val ok = synchronized(indexLock) {
-            val removed = entries.remove(key)
-            if (removed == null) {
-                false
-            } else {
-                totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
-                File(removed.filePath).delete()
+            synchronized(indexLock) {
+                val record = entries[key] ?: return@synchronized false
+                record.pinned = pinned
                 schedulePersistIndexLocked()
                 true
             }
         }
-        mainHandler.post { result.success(ok) }
+
+    override suspend fun removeFile(keyOrUrl: String): Boolean = withContext(Dispatchers.IO) {
+        ensureIndexLoaded()
+        val key = resolveKey(keyOrUrl)
+
+        val removed = synchronized(indexLock) {
+            val existing = entries.remove(key) ?: return@synchronized null
+            totalCachedBytes = (totalCachedBytes - existing.sizeBytes).coerceAtLeast(0L)
+            schedulePersistIndexLocked()
+            existing
+        } ?: return@withContext false
+
+        File(removed.filePath).delete()
+        true
     }
 
-    private fun handleRemoveByTag(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val tag = (args["tag"] as? String) ?: ""
+    override suspend fun removeByTag(tag: String): Long = withContext(Dispatchers.IO) {
+        ensureIndexLoaded()
+        val paths = mutableListOf<String>()
         val count = synchronized(indexLock) {
             val keys = entries.values.filter { it.tag == tag }.map { it.key }
             for (k in keys) {
                 val removed = entries.remove(k)
                 if (removed != null) {
                     totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
-                    File(removed.filePath).delete()
+                    paths.add(removed.filePath)
                 }
             }
             if (keys.isNotEmpty()) {
                 schedulePersistIndexLocked()
             }
-            keys.size
+            keys.size.toLong()
         }
-        mainHandler.post { result.success(count) }
+        for (path in paths) {
+            File(path).delete()
+        }
+        count
     }
 
-    private fun handleRemoveExpired(result: Result) {
-        val count = synchronized(indexLock) {
-            val removed = removeExpiredLocked()
+    override suspend fun removeExpired(): Long = withContext(Dispatchers.IO) {
+        ensureIndexLoaded()
+        val paths = mutableListOf<String>()
+        val removedCount = synchronized(indexLock) {
+            val removed = removeExpiredLocked(paths)
             if (removed > 0) {
                 schedulePersistIndexLocked()
             }
-            removed
+            removed.toLong()
         }
-        mainHandler.post { result.success(count) }
+        for (path in paths) {
+            File(path).delete()
+        }
+        removedCount
     }
 
-    private fun removeExpiredLocked(): Int {
+    private fun removeExpiredLocked(deletedPathsOut: MutableList<String>? = null): Int {
         val now = System.currentTimeMillis()
         val expiredKeys = entries.values.filter { !it.pinned && it.isExpired(now) }.map { it.key }
         for (k in expiredKeys) {
             val removed = entries.remove(k)
             if (removed != null) {
                 totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
-                File(removed.filePath).delete()
+                if (deletedPathsOut != null) {
+                    deletedPathsOut.add(removed.filePath)
+                } else {
+                    File(removed.filePath).delete()
+                }
             }
         }
         evictionCount += expiredKeys.size
         return expiredKeys.size
     }
 
-    private fun handleTrimToSize(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val targetMax = (args["maxBytes"] as? Number)?.toLong() ?: maxDiskCacheBytes
+    override suspend fun trimToSize(maxBytes: Long): Long = withContext(Dispatchers.IO) {
+        ensureIndexLoaded()
+        val paths = mutableListOf<String>()
         val evicted = synchronized(indexLock) {
-            val count = enforceQuotaLocked(targetMax, null, checkOnlyFastPath = false)
+            val count = enforceQuotaLocked(maxBytes, null, checkOnlyFastPath = false, paths)
             if (count > 0) {
                 schedulePersistIndexLocked()
             }
-            count
+            count.toLong()
         }
-        mainHandler.post { result.success(evicted) }
+        for (path in paths) {
+            File(path).delete()
+        }
+        evicted
     }
 
     private fun enforceQuotaLocked(
         targetMaxBytes: Long,
         protectedKey: String?,
-        checkOnlyFastPath: Boolean
+        checkOnlyFastPath: Boolean,
+        deletedPathsOut: MutableList<String>? = null,
     ): Int {
         if (checkOnlyFastPath && totalCachedBytes <= targetMaxBytes && entries.size <= maxEntries) {
             return 0
         }
 
-        var evicted = removeExpiredLocked()
+        var evicted = removeExpiredLocked(deletedPathsOut)
         if (evictionPolicy == "ttlOnly") {
             return evicted
         }
@@ -1356,13 +1312,17 @@ class XueHuaNaviteCacheManagerPlugin :
                 }
             }
 
-        for ((candidateKey) in candidates) {
+        for (candidate in candidates) {
             if (totalCachedBytes <= targetMaxBytes && entries.size <= maxEntries) {
                 break
             }
-            val removed = entries.remove(candidateKey)
+            val removed = entries.remove(candidate.key)
             if (removed != null) {
-                File(removed.filePath).delete()
+                if (deletedPathsOut != null) {
+                    deletedPathsOut.add(removed.filePath)
+                } else {
+                    File(removed.filePath).delete()
+                }
                 totalCachedBytes = (totalCachedBytes - removed.sizeBytes).coerceAtLeast(0L)
                 evicted += 1
                 evictionCount += 1L
@@ -1371,10 +1331,9 @@ class XueHuaNaviteCacheManagerPlugin :
         return evicted
     }
 
-    private fun handleClearAll(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val includePinned = (args["includePinned"] as? Boolean) ?: true
-        val count = try {
+    override suspend fun clearAll(includePinned: Boolean): Long = withContext(Dispatchers.IO) {
+        ensureIndexLoaded()
+        try {
             // Drop index entries under the lock, then delete files outside it so
             // concurrent listEntries/getStats are not blocked on disk I/O.
             val paths = mutableListOf<String>()
@@ -1388,40 +1347,38 @@ class XueHuaNaviteCacheManagerPlugin :
                     }
                 }
                 schedulePersistIndexLocked(immediate = true)
-                keys.size
+                keys.size.toLong()
             }
             for (path in paths) {
                 File(path).delete()
             }
             removedCount
         } catch (e: Exception) {
-            mainHandler.post { result.error("CLEAR_ALL_FAILED", e.message, null) }
-            return
+            throw FlutterError("CLEAR_ALL_FAILED", e.message, null)
         }
-        mainHandler.post { result.success(count) }
     }
 
-    private fun handleListEntries(call: MethodCall, result: Result) {
-        val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
-        val tag = args["tag"] as? String
-        val includeExpired = (args["includeExpired"] as? Boolean) ?: true
-        val now = System.currentTimeMillis()
-
-        val filtered = synchronized(indexLock) {
-            entries.values.filter { record ->
-                (tag == null || record.tag == tag) && (includeExpired || !record.isExpired(now))
-            }.sortedByDescending { it.lastAccessedAtMs }
-                .map { it.toMap() }
+    override suspend fun listEntries(tag: String?, includeExpired: Boolean): List<WireCacheEntry> =
+        withContext(Dispatchers.IO) {
+            ensureIndexLoaded()
+            val now = System.currentTimeMillis()
+            synchronized(indexLock) {
+                entries.values
+                    .filter { record ->
+                        (tag == null || record.tag == tag) && (includeExpired || !record.isExpired(now))
+                    }
+                    .sortedByDescending { it.lastAccessedAtMs }
+                    .map { it.toWire() }
+            }
         }
-        mainHandler.post { result.success(filtered) }
-    }
 
-    private fun handleGetStats(result: Result) {
+    override suspend fun getStats(): WireCacheStats = withContext(Dispatchers.IO) {
+        ensureIndexLoaded()
         val now = System.currentTimeMillis()
-        val stats = synchronized(indexLock) {
+        synchronized(indexLock) {
             var totalBytes = 0L
-            var expiredCount = 0
-            var pinnedCount = 0
+            var expiredCount = 0L
+            var pinnedCount = 0L
             val bytesByTag = mutableMapOf<String, Long>()
 
             for (record in entries.values) {
@@ -1433,32 +1390,68 @@ class XueHuaNaviteCacheManagerPlugin :
             }
             totalCachedBytes = totalBytes
 
-            mapOf<String, Any?>(
-                "totalEntries" to entries.size,
-                "totalBytes" to totalBytes,
-                "expiredEntries" to expiredCount,
-                "pinnedEntries" to pinnedCount,
-                "maxDiskCacheBytes" to maxDiskCacheBytes,
-                "cacheDirectoryPath" to getCacheRootDir().absolutePath,
-                "hitCount" to hitCount,
-                "missCount" to missCount,
-                "evictionCount" to evictionCount,
-                "bytesByTag" to bytesByTag
+            WireCacheStats(
+                totalEntries = entries.size.toLong(),
+                totalBytes = totalBytes,
+                expiredEntries = expiredCount,
+                pinnedEntries = pinnedCount,
+                maxDiskCacheBytes = maxDiskCacheBytes,
+                cacheDirectoryPath = getCacheRootDir().absolutePath,
+                hitCount = hitCount,
+                missCount = missCount,
+                evictionCount = evictionCount,
+                bytesByTag = bytesByTag,
             )
         }
-        mainHandler.post { result.success(stats) }
     }
 
-    private fun handleGetCapabilities(result: Result) {
-        val caps = mapOf<String, Any?>(
-            "platformName" to "android",
-            "supportsFileSystemPaths" to true,
-            "supportsConditionalHttpRevalidation" to true,
-            "supportsNativeCryptoHash" to true,
-            "supportsLowDiskSpaceNotifications" to true,
-            "storageMechanism" to "Context.getCacheDir() + HttpURLConnection + Debounced Index",
-            "defaultCacheRootPath" to getCacheRootDir().absolutePath
+    override fun getCapabilities(): WireCachePlatformCapabilities {
+        val defaultRoot = if (::applicationContext.isInitialized) {
+            File(applicationContext.cacheDir, cacheSubdirectory).absolutePath
+        } else {
+            ""
+        }
+        return WireCachePlatformCapabilities(
+            platformName = "android",
+            supportsFileSystemPaths = true,
+            supportsConditionalHttpRevalidation = true,
+            supportsNativeCryptoHash = true,
+            supportsLowDiskSpaceNotifications = true,
+            storageMechanism = "Context.getCacheDir() + HttpURLConnection + Debounced Index",
+            defaultCacheRootPath = defaultRoot,
         )
-        result.success(caps)
+    }
+
+    companion object {
+        private fun newProgressExecutor(): ExecutorService {
+            return Executors.newSingleThreadExecutor { r ->
+                Thread(r, "xuehua-cache-progress").apply { isDaemon = true }
+            }
+        }
+
+        private fun toWireChecksumAlgorithm(value: String): WireCacheChecksumAlgorithm {
+            return when (value.lowercase()) {
+                "md5" -> WireCacheChecksumAlgorithm.MD5
+                "sha256" -> WireCacheChecksumAlgorithm.SHA256
+                else -> WireCacheChecksumAlgorithm.NONE
+            }
+        }
+
+        private fun fromWireChecksumAlgorithm(value: WireCacheChecksumAlgorithm): String {
+            return when (value) {
+                WireCacheChecksumAlgorithm.MD5 -> "md5"
+                WireCacheChecksumAlgorithm.SHA256 -> "sha256"
+                WireCacheChecksumAlgorithm.NONE -> "none"
+            }
+        }
+
+        private fun fromWireEvictionPolicy(value: WireCacheEvictionPolicy): String {
+            return when (value) {
+                WireCacheEvictionPolicy.LRU -> "lru"
+                WireCacheEvictionPolicy.LFU -> "lfu"
+                WireCacheEvictionPolicy.FIFO -> "fifo"
+                WireCacheEvictionPolicy.TTL_ONLY -> "ttlOnly"
+            }
+        }
     }
 }

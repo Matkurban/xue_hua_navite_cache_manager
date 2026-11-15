@@ -167,7 +167,7 @@ class CacheWorkbenchController {
       connectTimeoutMs: 15000,
       readTimeoutMs: 30000,
       defaultHeaders: const <String, String>{
-        'X-Client-Plugin': 'xue_hua_navite_cache_manager/1.2.0',
+        'X-Client-Plugin': 'xue_hua_navite_cache_manager/1.3.0',
       },
       respectHttpCacheHeaders: true,
       autoTrimOnWrite: true,

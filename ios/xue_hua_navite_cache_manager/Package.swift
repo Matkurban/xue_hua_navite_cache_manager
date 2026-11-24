@@ -16,14 +16,8 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "xue_hua_navite_cache_manager_objc_gen",
-            dependencies: [],
-            publicHeadersPath: "."
-        ),
-        .target(
             name: "xue_hua_navite_cache_manager",
             dependencies: [
-                "xue_hua_navite_cache_manager_objc_gen",
                 .product(name: "FlutterFramework", package: "FlutterFramework"),
             ],
             resources: [

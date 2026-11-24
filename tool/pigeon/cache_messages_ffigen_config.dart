@@ -84,6 +84,7 @@ Future<void> main(List<String> args) async {
         classes.contains(d.name) || enums.contains(d.name),
     output: Output(
       module: 'xue_hua_navite_cache_manager',
+      assetId: 'package:xue_hua_navite_cache_manager/xue_hua_navite_cache_manager_objc_gen.dylib',
       dartFile: Uri.file('lib/src/pigeon/cache_messages.g.ffi.dart'),
       objectiveCFile: Uri.file(
         'ios/xue_hua_navite_cache_manager/Sources/xue_hua_navite_cache_manager_objc_gen/CacheMessages.g.m',

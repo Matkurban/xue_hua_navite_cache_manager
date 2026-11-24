@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'xue_hua_navite_cache_manager'
-  s.version          = '1.3.0'
+  s.version          = '1.3.1'
   s.summary          = 'Cross-platform native network file cache manager for Flutter.'
   s.description      = <<-DESC
 Cross-platform native network file cache manager for Flutter with HTTP 304 revalidation, LRU/LFU/FIFO/TTL eviction, MD5/SHA-256 verification, and progress streaming.
@@ -9,7 +9,7 @@ Cross-platform native network file cache manager for Flutter with HTTP 304 reval
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Matkurban' => '3496354336@qq.com' }
   s.source           = { :path => '.' }
-  s.source_files = 'xue_hua_navite_cache_manager/Sources/**/*.{swift,m,h}'
+  s.source_files = 'xue_hua_navite_cache_manager/Sources/xue_hua_navite_cache_manager/**/*.swift'
   s.dependency 'Flutter'
   s.platform = :ios, '15.0'
 

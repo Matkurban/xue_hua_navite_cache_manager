@@ -1,3 +1,10 @@
+## 1.3.1
+
+* Fixed iOS TestFlight / Xcode Archive (and macOS Archive) image loading failures caused by Xcode stripping statically linked Pigeon Objective-C FFI trampoline symbols (`_1uef25_wrapListenerBlock_*`, `_1uef25_protocolTrampoline_*`, `_1uef25_CacheProgressFlutterApiBridge`) when archiving with default `STRIP_STYLE = all`:
+  * Added a Dart Native Code Asset build hook (`hook/build.dart`) using `code_assets` and `hooks` to compile `CacheMessages.g.m` into a dedicated bundled dynamic framework (`xue_hua_navite_cache_manager_objc_gen.framework`) with `.dSYM` generation and `strip -x -S` preservation of global FFI symbols on both iOS and macOS, requiring zero host-app `STRIP_STYLE` changes across SwiftPM and CocoaPods (static or dynamic).
+  * Updated `tool/generate_pigeon.dart`, `tool/pigeon/cache_messages_ffigen_config.dart`, and `lib/src/pigeon/cache_messages.g.ffi.dart` to bind `@ffi.DefaultAsset('package:xue_hua_navite_cache_manager/xue_hua_navite_cache_manager_objc_gen.dylib')`.
+  * Removed duplicate `CacheMessages.g.m` compilation from iOS and macOS `Package.swift` and `.podspec` files so ObjC helper classes are never duplicated in the host app binary.
+
 ## 1.3.0
 
 * Migrated native platform communication from manual `MethodChannel`/`EventChannel` + `plugin_platform_interface` to **Pigeon Native Interop**:

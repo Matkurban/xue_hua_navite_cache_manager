@@ -1,8 +1,8 @@
-#include "xue_hua_navite_cache_manager_plugin.h"
-
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+
+#include "xue_hua_navite_cache_manager_plugin.h"
 
 #include <windows.h>
 #include <objbase.h>

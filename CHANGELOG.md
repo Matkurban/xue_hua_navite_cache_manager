@@ -1,3 +1,7 @@
+## 1.3.2
+
+* Fixed Windows Release builds failing with MSVC `error C2589` (`std::max` expanded by the `<windows.h>` `max` macro). `NOMINMAX` is now defined before the plugin header includes `<windows.h>`, and the Windows plugin CMake target defines `NOMINMAX`, so host apps can `flutter build windows --release` without extra compiler flags.
+
 ## 1.3.1
 
 * Fixed iOS TestFlight / Xcode Archive (and macOS Archive) image loading failures caused by Xcode stripping statically linked Pigeon Objective-C FFI trampoline symbols (`_1uef25_wrapListenerBlock_*`, `_1uef25_protocolTrampoline_*`, `_1uef25_CacheProgressFlutterApiBridge`) when archiving with default `STRIP_STYLE = all`:

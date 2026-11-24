@@ -44,7 +44,7 @@
 
 ```yaml
 dependencies:
-  xue_hua_navite_cache_manager: ^1.3.1
+  xue_hua_navite_cache_manager: ^1.3.2
 ```
 
 ### Android 配置

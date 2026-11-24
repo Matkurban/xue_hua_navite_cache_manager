@@ -13,9 +13,9 @@ dependencies:
   xue_hua_navite_cache_manager:
     path: ../
   cupertino_icons: ^2.0.0
-  material_ui: ^1.11.0
+  material_ui: ^1.11.1
   flex_color_scheme: ^9.0.0
-  cupertino_ui: ^1.1.6
+  cupertino_ui: ^1.1.7
   signals_flutter: ^7.1.0
 
 dev_dependencies:
